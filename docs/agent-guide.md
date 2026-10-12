@@ -44,11 +44,26 @@ tts config list --json                   # 全量（含 api_key_source: env|conf
 - Key 也可由环境变量 `MIMO_API_KEY` 提供（优先级更高，适合 CI）。
 - 测试/隔离：把 `TTS_WORKSPACE_ROOT` 指向临时目录即可得到完全独立的工作区。
 
-## 3. 工作流配方（🚧 M1 / M2）
+## 3. 工作流配方
 
-> 下列命令尚未实现，将在 M1（合成/项目/批量/导出）与 M2（音色库）交付；接口见 docs/cli.md 计划表。
+### 3.0 单条合成与试听（✅ 已实现）
 
-### 3.1 从剧本到批量配音（主流程）
+```bash
+# 独立合成（写入 <工作区>/synth/<cache_key>.wav）
+tts synth --text "早上好！" --voice 冰糖 --style "轻快一点" --json
+
+# 指定输出文件 / 设计音色（design: 在 M2 配合 voicedesign 模型）
+tts synth --text "试听文本" --voice design:"温柔的年轻女声" --out ./demo.wav
+
+# 项目行合成：take 落盘 + 行状态更新 + 选中项自动设置
+tts synth --project ./works/rainy-station --line L3f2a9c01 --voice 冰糖 --style "(低沉)" --json
+```
+
+要点：相同参数重跑命中缓存（`cached: true`，不重复请求、不再等待）；失败同样写审计（`error_code`）；`--stream` 仅预置音色模型可用。
+
+### 3.1 从剧本到批量配音（主流程，🚧）
+
+> 批量与导出命令（`batch` / `takes` / `export`）将在 M1 后续里程碑交付；接口见 [docs/cli.md](cli.md) 计划表。
 
 ```bash
 tts project init ./works/rainy-station

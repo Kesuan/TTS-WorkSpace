@@ -12,7 +12,9 @@
 │  └─ voices/<voice_id>/              #    voice.json + sample.wav|mp3
 ├─ cache/                             # ✅ 内容寻址缓存
 │  └─ <key16>/                        #    blob.wav + meta.json
-├─ audit/                             # 🚧 审计日志
+├─ synth/                             # ✅ 独立模式合成输出（tts synth）
+│  └─ <cache_key>.wav
+├─ audit/                             # ✅ 审计日志
 │  └─ audit.jsonl                     #    append-only JSONL
 └─ projects/                          # 项目根（项目也可放在任意路径）
 ```
@@ -76,15 +78,15 @@
 - `type=design`：`design_prompt` 是音色来源；**建议先 `design solidify` 固化为克隆样本再批量使用**（设计模型每次生成可能不一致）。
 - `type=clone`：`sample_file` 为 ≤10MB 的 wav/mp3；请求时编码为 `data:audio/...;base64,…`。
 
-## 审计日志 🚧（M1）
+## 审计日志 ✅
 
-`audit/audit.jsonl`，每行一条，append-only：
+`audit/audit.jsonl`，每行一条，append-only（`tts synth` 成功与失败都会写入；后续 batch / export 同样）：
 
 ```json
-{"ts":"2026-10-12T09:00:00Z","cmd":"batch.generate","project":"rainy-station","model":"mimo-v2.5-tts","voice_ref":"冰糖","chars":37,"duration_ms":1820,"status":"ok","cost_note":"tts:free"}
+{"ts":"2026-10-12T09:00:00Z","cmd":"synth","project":"/…/rainy-station","line_id":"L3f2a9c01","model":"mimo-v2.5-tts","voice":"冰糖","chars":37,"duration_ms":1820,"latency_ms":880,"cached":false,"status":"ok","cost_note":"tts:free"}
 ```
 
-`tts usage` 由该文件聚合（请求数 / 字符数 / 缓存命中率 / 音频时长），为将来计费做准备。
+`tts usage`（🚧）由该文件聚合（请求数 / 字符数 / 缓存命中率 / 音频时长），为将来计费做准备。
 
 ## 项目（= 作品）🚧（M1）
 

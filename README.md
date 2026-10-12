@@ -38,18 +38,25 @@ tts doctor --json
 
 ## CLI 速览
 
-已实现（M0）：
+已实现：
 
 ```bash
-tts version --json
-tts doctor --json --skip-network          # 离线自检（CI/Agent 常用）
-tts config list --json
-tts config get api.base_url --json
-tts config set generation.concurrency 3
+# 环境与配置（M0）
+tts doctor --json --skip-network
+tts config set api.api_key sk-xxxx
+
+# 项目与对白脚本（M1）
+tts project init ./works/rainy-station --name "雨夜车站"
+tts project import ./works/rainy-station/script/chapter1.txt --project ./works/rainy-station --json
+tts project status --project ./works/rainy-station --json
+
+# 单条合成（幂等缓存 + 审计；--line 联动项目 take）
+tts synth --text "早上好！" --voice 冰糖 --json
+tts synth --project ./works/rainy-station --line L3f2a9c01 --voice 冰糖 --style "(低沉)"
 ```
 
-计划中（M1，见 [docs/cli.md](docs/cli.md)）：
-`synth` · `project` · `role` · `line` · `batch` · `takes` · `cast` · `export` · `usage` · `voice` · `design` · `clone`。
+计划中（M1 后续，见 [docs/cli.md](docs/cli.md)）：
+`role` · `line` · `batch` · `takes` · `cast` · `export` · `usage` · `gc`；M2：`voice` · `design` · `clone`。
 
 ## 仓库结构
 

@@ -184,6 +184,51 @@
 
 - `tts project status [--project <目录>]`：条目状态分布与角色绑定概览。Schema：[`project-status`](../schemas/cli/project-status.schema.json)
 
+### `tts synth`
+
+单条合成（**幂等**：相同参数命中缓存不重复请求）。
+
+| 参数 | 说明 |
+| --- | --- |
+| `--text <文本>` | 待合成文本；使用 `--line` 时可省略（取行文本） |
+| `--voice <引用>` | 音色引用（语法见下）；省略时按「行级覆盖 > 角色绑定」解析 |
+| `--style <指令>` | 风格指令（自然语言，写入 user 消息） |
+| `--model <ID>` | 模型 ID（默认取配置 `models.tts`） |
+| `--stream` | 低延迟流式输出（仅预置音色模型；仍落盘完整 wav） |
+| `--no-cache` | 跳过缓存，强制请求 |
+| `--out <文件>` | 输出文件（独立模式；默认 `<工作区>/synth/<cache_key>.wav`） |
+| `--project <目录>` | 项目目录（配合 `--line` 使用，默认当前目录） |
+| `--line <ID>` | 行 ID：写入 take、更新行状态与选中项 |
+
+**音色引用语法**：`<预置名或 ID>`（如 `冰糖`、`mimo_default`）· `preset:<名>` · `design:<音色描述>` · `clone:<音频文件路径>`（wav/mp3，base64 后 ≤10MB）。
+
+```json
+{
+  "ok": true,
+  "data": {
+    "output": "/Users/me/.tts-workbench/synth/9c1e0b7f3a2d4e56.wav",
+    "model": "mimo-v2.5-tts",
+    "voice": "冰糖",
+    "chars": 4,
+    "duration_ms": 1200,
+    "latency_ms": 880,
+    "cached": false,
+    "cache_key": "9c1e0b7f3a2d4e56",
+    "sample_rate": 24000,
+    "stream": false,
+    "line_id": null,
+    "take_id": null
+  }
+}
+```
+
+行为说明（Schema：[`synth`](../schemas/cli/synth.schema.json)）：
+
+- **缓存**：指纹 = 模型 / 音色 / 文本 / 风格 / 格式 / 流式标志（空白差异不影响）；命中时 `cached: true` 且 `latency_ms: 0`。
+- **审计**：成功与失败都会写入 `audit/audit.jsonl`（`cmd: "synth"`；失败记录带 `error_code`）。
+- **行模式**：take 写入 `takes/<line_id>/<NNNN>_<hash8>.wav`；首条自动设为 `selected_take`，行状态更新为 `ok`。`--out` 与 `--line` 互斥。
+- 行已被标记 `removed` → `E_USAGE`；行不存在 → `E_NOT_FOUND`。
+
 ---
 
 ## 计划中命令（🚧 M1 / M2）
@@ -192,7 +237,6 @@
 
 | 命令 | 说明 |
 | --- | --- |
-| `tts synth --text … --voice … [--style …] [--stream] [--play]` | 单条合成（流式仅预置音色模型；`--play` 本机播放） |
 | `tts voice list\|show\|rm` | 全局音色库（预置 / 设计 / 克隆） |
 | `tts design --prompt … --text … [--optimize-text-preview]` | 文本设计音色并试听 |
 | `tts design solidify --take <id> --name <名>` | 设计 → 克隆固化（保证跨句一致） |

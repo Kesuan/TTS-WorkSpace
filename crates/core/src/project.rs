@@ -9,11 +9,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, TtsError, E_IO, E_NOT_FOUND, E_USAGE};
 use crate::script::{parse_file, ParseCounts, ParseOptions, ParseWarning, ParsedLine};
+use crate::util::now_rfc3339;
 
 pub const PROJECT_SCHEMA_VERSION: u32 = 1;
 pub const LINES_SCHEMA_VERSION: u32 = 1;
@@ -22,10 +22,6 @@ pub const STATUS_PENDING: &str = "pending";
 pub const STATUS_OK: &str = "ok";
 pub const STATUS_FAILED: &str = "failed";
 pub const STATUS_REMOVED: &str = "removed";
-
-fn now_rfc3339() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
-}
 
 /// 角色 ↔ 音色绑定（项目级）。
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]

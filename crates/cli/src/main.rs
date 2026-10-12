@@ -5,17 +5,29 @@
 //! - 非 `--json`：成功输出到 stdout（人类可读），失败输出到 stderr；
 //! - 退出码：0 成功 / 1 运行时失败 / 2 用法与校验错误 / 3 部分失败 / 4 需要确认。
 
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand};
 use serde_json::{json, Value};
 
+use tts_core::audit::{self, AuditRecord};
+use tts_core::cache::Cache;
 use tts_core::config::{mask_secret, Config, ENV_API_KEY};
 use tts_core::doctor::{self, CheckStatus};
-use tts_core::error::{success_envelope, Result, TtsError, E_DOCTOR_UNHEALTHY, E_USAGE};
+use tts_core::error::{
+    success_envelope, Result, TtsError, E_DOCTOR_UNHEALTHY, E_IO, E_NOT_FOUND, E_USAGE,
+};
+use tts_core::mimo::MimoClient;
 use tts_core::paths::Paths;
-use tts_core::project::{Project, STATUS_FAILED, STATUS_OK, STATUS_PENDING, STATUS_REMOVED};
+use tts_core::project::{
+    Project, TakeRef, STATUS_FAILED, STATUS_OK, STATUS_PENDING, STATUS_REMOVED,
+};
+use tts_core::provider::AudioFormat;
 use tts_core::script::ParseOptions;
+use tts_core::synth::{self, SynthOptions, SynthOutcome};
+use tts_core::util::now_rfc3339;
+use tts_core::voices::parse_voice_ref;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -54,6 +66,8 @@ enum Command {
     Config(ConfigArgs),
     /// 项目（= 作品）管理：初始化 / 导入对白 / 状态
     Project(ProjectArgs),
+    /// 合成单条语音（缓存去重；可联动项目行写入 take）
+    Synth(SynthArgs),
     /// 打印版本信息
     Version,
 }
@@ -134,6 +148,37 @@ enum ProjectCmd {
     },
 }
 
+#[derive(Args, Debug)]
+struct SynthArgs {
+    /// 待合成文本（使用 --line 时可省略，取行文本）
+    #[arg(long)]
+    text: Option<String>,
+    /// 音色：预置名/ID（如 冰糖），或 design:<描述>、clone:<音频文件>
+    #[arg(long)]
+    voice: Option<String>,
+    /// 风格指令（自然语言，写入 user 消息）
+    #[arg(long)]
+    style: Option<String>,
+    /// 模型 ID（默认取配置 models.tts）
+    #[arg(long)]
+    model: Option<String>,
+    /// 低延迟流式输出（仅预置音色模型；仍落盘完整 wav）
+    #[arg(long)]
+    stream: bool,
+    /// 跳过缓存，强制请求
+    #[arg(long)]
+    no_cache: bool,
+    /// 输出文件（独立模式；默认 <工作区>/synth/<cache_key>.wav）
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// 项目目录（配合 --line 写入 take）
+    #[arg(long)]
+    project: Option<PathBuf>,
+    /// 行 ID（联动项目：写 take、更新状态与选中项）
+    #[arg(long)]
+    line: Option<String>,
+}
+
 struct CmdOutput {
     data: Value,
     human: String,
@@ -196,6 +241,7 @@ async fn execute(cli: &Cli) -> Result<CmdOutput> {
         Command::Doctor(args) => cmd_doctor(args).await,
         Command::Config(args) => cmd_config(args),
         Command::Project(args) => cmd_project(args),
+        Command::Synth(args) => cmd_synth(args).await,
         Command::Version => cmd_version(),
     }
 }
@@ -428,6 +474,200 @@ fn cmd_project(args: &ProjectArgs) -> Result<CmdOutput> {
             Ok(CmdOutput { data, human })
         }
     }
+}
+
+async fn cmd_synth(args: &SynthArgs) -> Result<CmdOutput> {
+    let paths = Paths::resolve()?;
+    let config = Config::load(&paths.config_file)?;
+    paths.ensure_layout()?;
+
+    if args.out.is_some() && args.line.is_some() {
+        return Err(TtsError::usage(E_USAGE, "--out 与 --line 不能同时使用"));
+    }
+
+    let project = match (&args.project, &args.line) {
+        (Some(dir), Some(_)) => Some(Project::open(dir)?),
+        (None, Some(_)) => Some(Project::open(Path::new("."))?),
+        (_, None) => None,
+    };
+
+    let mut text = args.text.clone();
+    let mut voice_spec = args.voice.clone();
+    let mut style = args.style.clone();
+
+    if let (Some(project), Some(line_id)) = (project.as_ref(), args.line.as_ref()) {
+        let lines = project.load_lines()?;
+        let line = lines.find(line_id).ok_or_else(|| {
+            TtsError::runtime(E_NOT_FOUND, format!("未找到行：{line_id}"))
+                .with_hint("用 `tts project status` 查看条目")
+        })?;
+        if line.status == STATUS_REMOVED {
+            return Err(
+                TtsError::usage(E_USAGE, format!("行已被标记 removed：{line_id}"))
+                    .with_hint("重新导入脚本，或选择其他行"),
+            );
+        }
+        if text.is_none() {
+            text = Some(line.text.clone());
+        }
+        if voice_spec.is_none() {
+            voice_spec = project.resolve_voice(line);
+        }
+        if style.is_none() {
+            style = project.resolve_style(line);
+        }
+    }
+
+    let text = text
+        .ok_or_else(|| TtsError::usage(E_USAGE, "缺少 --text（或使用 --line 从项目读取行文本）"))?;
+    let voice_spec = voice_spec.ok_or_else(|| {
+        TtsError::usage(E_USAGE, "未指定音色")
+            .with_hint("用 --voice <音色>，或先为角色绑定音色（tts role bind）")
+    })?;
+    let voice = parse_voice_ref(&voice_spec)?;
+    let model = args
+        .model
+        .clone()
+        .unwrap_or_else(|| config.models.tts.clone());
+
+    let options = SynthOptions {
+        model: model.clone(),
+        text: text.clone(),
+        voice,
+        instructions: style.clone(),
+        format: AudioFormat::Wav,
+        stream: args.stream,
+        use_cache: !args.no_cache,
+    };
+
+    let client = MimoClient::from_config(&config)?;
+    let cache = Cache::new(paths.cache_dir());
+    let outcome = match synth::synthesize(&client, &cache, &options).await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let mut record = AuditRecord::ok("synth", &model).into_failed(error.code());
+            record.chars = text.chars().count();
+            record.voice = Some(voice_spec.clone());
+            record.project = project.as_ref().map(|p| p.root.display().to_string());
+            record.line_id = args.line.clone();
+            let _ = audit::append(&paths.audit_file(), &record);
+            return Err(error);
+        }
+    };
+
+    let (output_path, take_id) = match args.line.as_ref() {
+        Some(line_id) => {
+            let project = project.as_ref().expect("--line 时项目必然存在");
+            let (path, take_id) = write_take(project, line_id, &outcome)?;
+            (path, Some(take_id))
+        }
+        None => {
+            let path = match &args.out {
+                Some(path) => path.clone(),
+                None => paths
+                    .root
+                    .join("synth")
+                    .join(format!("{}.wav", outcome.cache_key)),
+            };
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|e| {
+                    TtsError::runtime(E_IO, format!("无法创建目录 {}：{e}", parent.display()))
+                })?;
+            }
+            fs::write(&path, &outcome.audio).map_err(|e| {
+                TtsError::runtime(E_IO, format!("写入音频失败 {}：{e}", path.display()))
+            })?;
+            (path, None)
+        }
+    };
+
+    let mut record = AuditRecord::ok("synth", &outcome.model);
+    record.project = project.as_ref().map(|p| p.root.display().to_string());
+    record.line_id = args.line.clone();
+    record.voice = Some(voice_spec.clone());
+    record.chars = outcome.chars;
+    record.duration_ms = outcome.duration_ms;
+    record.latency_ms = outcome.latency_ms;
+    record.cached = outcome.cached;
+    record.cost_note = Some("tts:free".to_string());
+    audit::append(&paths.audit_file(), &record)?;
+
+    let data = json!({
+        "output": output_path.display().to_string(),
+        "model": outcome.model,
+        "voice": voice_spec,
+        "chars": outcome.chars,
+        "duration_ms": outcome.duration_ms,
+        "latency_ms": outcome.latency_ms,
+        "cached": outcome.cached,
+        "cache_key": outcome.cache_key,
+        "sample_rate": outcome.sample_rate,
+        "stream": args.stream,
+        "line_id": args.line,
+        "take_id": take_id,
+    });
+    let cached_note = if outcome.cached {
+        "，缓存命中"
+    } else {
+        ""
+    };
+    let human = format!(
+        "已生成 {}（{} 字符 / {:.1}s{}）",
+        output_path.display(),
+        outcome.chars,
+        outcome.duration_ms as f64 / 1000.0,
+        cached_note
+    );
+    Ok(CmdOutput { data, human })
+}
+
+/// 项目 take 落盘：写音频文件 + 追加 TakeRef + 更新状态与选中项。
+fn write_take(
+    project: &Project,
+    line_id: &str,
+    outcome: &SynthOutcome,
+) -> Result<(PathBuf, String)> {
+    let dir = project.takes_dir().join(line_id);
+    fs::create_dir_all(&dir)
+        .map_err(|e| TtsError::runtime(E_IO, format!("无法创建目录 {}：{e}", dir.display())))?;
+
+    let mut lines = project.load_lines()?;
+    let sequence = lines
+        .find(line_id)
+        .map(|line| line.takes.len() + 1)
+        .unwrap_or(1);
+    let take_id = format!("{sequence:04}");
+    let short = &outcome.cache_key[..8.min(outcome.cache_key.len())];
+    let path = dir.join(format!("{take_id}_{short}.wav"));
+    fs::write(&path, &outcome.audio)
+        .map_err(|e| TtsError::runtime(E_IO, format!("写入音频失败 {}：{e}", path.display())))?;
+    let relative = path
+        .strip_prefix(&project.root)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| path.clone())
+        .display()
+        .to_string();
+
+    let entry = lines
+        .find_mut(line_id)
+        .ok_or_else(|| TtsError::runtime(E_NOT_FOUND, format!("未找到行：{line_id}")))?;
+    entry.takes.push(TakeRef {
+        take_id: take_id.clone(),
+        file: relative,
+        params_hash: short.to_string(),
+        cache_key: Some(outcome.cache_key.clone()),
+        chars: outcome.chars,
+        duration_ms: outcome.duration_ms,
+        created_at: now_rfc3339(),
+    });
+    if entry.status != STATUS_OK {
+        entry.status = STATUS_OK.to_string();
+    }
+    if entry.selected_take.is_none() {
+        entry.selected_take = Some(take_id.clone());
+    }
+    project.save_lines(&lines)?;
+    Ok((path, take_id))
 }
 
 fn is_secret_key(key: &str) -> bool {

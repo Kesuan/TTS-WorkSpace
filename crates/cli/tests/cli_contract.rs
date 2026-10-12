@@ -9,6 +9,8 @@ use std::process::Command;
 use serde_json::Value;
 use tempfile::TempDir;
 
+mod support;
+
 /// 仓库根目录（crates/cli → ../..）。
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -69,6 +71,21 @@ impl Sandbox {
     /// 运行并解析 stdout JSON。
     fn run_json(&self, args: &[&str]) -> (i32, Value) {
         let output = self.cmd().args(args).output().expect("无法启动 tts 进程");
+        let code = output.status.code().unwrap_or(-1);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let json: Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+            panic!("stdout 不是 JSON：{e}\nargs={args:?}\nstdout={stdout}\nstderr={stderr}")
+        });
+        (code, json)
+    }
+
+    /// 指向本地 mock API 运行并解析 stdout JSON。
+    fn run_json_with_api(&self, base_url: &str, api_key: &str, args: &[&str]) -> (i32, Value) {
+        let mut cmd = self.cmd();
+        cmd.env("MIMO_BASE_URL", base_url)
+            .env("MIMO_API_KEY", api_key);
+        let output = cmd.args(args).output().expect("无法启动 tts 进程");
         let code = output.status.code().unwrap_or(-1);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -337,4 +354,203 @@ fn human_mode_writes_success_to_stdout_error_to_stderr() {
     assert!(output.stdout.is_empty(), "错误不应写 stdout");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("E_USAGE"), "stderr 应包含错误码：{stderr}");
+}
+
+#[test]
+fn synth_generates_file_caches_and_audits() {
+    let sandbox = Sandbox::new();
+    let server = support::MockServer::start(vec![support::MockResponse::json(
+        support::chat_response_with_wav(&support::tiny_wav()),
+    )]);
+
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &["--json", "synth", "--text", "早上好！", "--voice", "冰糖"],
+    );
+    assert_eq!(code, 0, "synth 应成功：{json}");
+    validate("cli/synth.schema.json", &json);
+    assert_eq!(json["data"]["cached"], Value::Bool(false));
+    assert_eq!(json["data"]["duration_ms"], Value::from(100));
+    assert_eq!(json["data"]["line_id"], Value::Null);
+    assert_eq!(json["data"]["take_id"], Value::Null);
+    assert_eq!(server.request_count(), 1);
+
+    let output_path = json["data"]["output"].as_str().unwrap();
+    assert!(
+        std::path::Path::new(output_path).is_file(),
+        "输出文件应存在：{output_path}"
+    );
+
+    let audit = std::fs::read_to_string(sandbox.path().join("audit/audit.jsonl")).unwrap();
+    assert!(audit.contains("\"cmd\":\"synth\""));
+    assert!(audit.contains("\"status\":\"ok\""));
+
+    // 第二次：缓存命中，不重复请求
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &["--json", "synth", "--text", "早上好！", "--voice", "冰糖"],
+    );
+    assert_eq!(code, 0);
+    assert_eq!(json["data"]["cached"], Value::Bool(true));
+    assert_eq!(server.request_count(), 1, "缓存命中不应产生新请求");
+
+    // --no-cache：强制请求
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "synth",
+            "--text",
+            "早上好！",
+            "--voice",
+            "冰糖",
+            "--no-cache",
+        ],
+    );
+    assert_eq!(code, 0);
+    assert_eq!(json["data"]["cached"], Value::Bool(false));
+    assert_eq!(server.request_count(), 2);
+}
+
+#[test]
+fn synth_stream_consumes_sse() {
+    let sandbox = Sandbox::new();
+    let pcm = vec![0u8; 4_800]; // 100ms @24kHz
+    let half = pcm.len() / 2;
+    let server = support::MockServer::start(vec![support::MockResponse::sse(
+        support::chat_sse_with_pcm(&[pcm[..half].to_vec(), pcm[half..].to_vec()]),
+    )]);
+
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "synth",
+            "--text",
+            "流式测试",
+            "--voice",
+            "冰糖",
+            "--stream",
+        ],
+    );
+    assert_eq!(code, 0, "流式 synth 应成功：{json}");
+    validate("cli/synth.schema.json", &json);
+    assert_eq!(json["data"]["stream"], Value::Bool(true));
+    assert_eq!(json["data"]["duration_ms"], Value::from(100));
+    assert_eq!(server.request_count(), 1);
+}
+
+#[test]
+fn synth_line_mode_writes_take_and_updates_lines() {
+    let sandbox = Sandbox::new();
+    let server = support::MockServer::start(vec![support::MockResponse::json(
+        support::chat_response_with_wav(&support::tiny_wav()),
+    )]);
+    let project_dir = sandbox.path().join("proj");
+    let project_arg = project_dir.to_str().unwrap();
+
+    let (code, _) = sandbox.run_json(&["--json", "project", "init", project_arg, "--name", "测试"]);
+    assert_eq!(code, 0);
+    let script = project_dir.join("script/chapter1.txt");
+    std::fs::write(&script, "阿岚: 又是这样的雨……\n").unwrap();
+    let (code, _) = sandbox.run_json(&[
+        "--json",
+        "project",
+        "import",
+        script.to_str().unwrap(),
+        "--project",
+        project_arg,
+    ]);
+    assert_eq!(code, 0);
+
+    let lines: Value =
+        serde_json::from_str(&std::fs::read_to_string(project_dir.join("lines.json")).unwrap())
+            .unwrap();
+    let line_id = lines["lines"][0]["id"].as_str().unwrap().to_string();
+
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "synth",
+            "--project",
+            project_arg,
+            "--line",
+            &line_id,
+            "--voice",
+            "冰糖",
+            "--style",
+            "(低沉)",
+        ],
+    );
+    assert_eq!(code, 0, "行合成应成功：{json}");
+    validate("cli/synth.schema.json", &json);
+    assert_eq!(json["data"]["line_id"], Value::from(line_id.clone()));
+    assert_eq!(json["data"]["take_id"], Value::from("0001"));
+
+    let lines: Value =
+        serde_json::from_str(&std::fs::read_to_string(project_dir.join("lines.json")).unwrap())
+            .unwrap();
+    assert_eq!(lines["lines"][0]["status"], Value::from("ok"));
+    assert_eq!(lines["lines"][0]["selected_take"], Value::from("0001"));
+    assert_eq!(lines["lines"][0]["takes"].as_array().unwrap().len(), 1);
+    let take_file = lines["lines"][0]["takes"][0]["file"].as_str().unwrap();
+    assert!(
+        project_dir.join(take_file).is_file(),
+        "take 文件应存在：{take_file}"
+    );
+
+    // 再次生成：相同参数 → 缓存命中，新 take 序号递增
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "synth",
+            "--project",
+            project_arg,
+            "--line",
+            &line_id,
+            "--voice",
+            "冰糖",
+            "--style",
+            "(低沉)",
+        ],
+    );
+    assert_eq!(code, 0);
+    assert_eq!(json["data"]["take_id"], Value::from("0002"));
+    assert_eq!(json["data"]["cached"], Value::Bool(true));
+    assert_eq!(server.request_count(), 1);
+}
+
+#[test]
+fn synth_stream_rejected_for_design_model_and_audited() {
+    let sandbox = Sandbox::new();
+    let (code, json) = sandbox.run_json_with_api(
+        "http://127.0.0.1:1/v1",
+        "test-key",
+        &[
+            "--json",
+            "synth",
+            "--text",
+            "测试",
+            "--voice",
+            "design:温柔女声",
+            "--model",
+            "mimo-v2.5-tts-voicedesign",
+            "--stream",
+        ],
+    );
+    assert_eq!(code, 2);
+    validate("common/envelope-error.schema.json", &json);
+    assert_eq!(json["error"]["code"], Value::from("E_CAPABILITY"));
+
+    let audit = std::fs::read_to_string(sandbox.path().join("audit/audit.jsonl")).unwrap();
+    assert!(audit.contains("E_CAPABILITY"), "失败也应写入审计：{audit}");
+    assert!(audit.contains("\"status\":\"failed\""));
 }
