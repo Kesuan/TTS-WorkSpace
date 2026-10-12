@@ -96,6 +96,24 @@ impl Cache {
         Ok(blob)
     }
 
+    /// 列出缓存目录中的 key（目录名，排序后返回）。
+    pub fn keys(&self) -> Result<Vec<String>> {
+        let mut keys = Vec::new();
+        if !self.root.exists() {
+            return Ok(keys);
+        }
+        let entries =
+            fs::read_dir(&self.root).map_err(|e| cache_io("读取缓存目录失败", &self.root, e))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| cache_io("读取缓存目录失败", &self.root, e))?;
+            if entry.path().is_dir() {
+                keys.push(entry.file_name().to_string_lossy().to_string());
+            }
+        }
+        keys.sort();
+        Ok(keys)
+    }
+
     /// 删除未被引用的缓存目录；`referenced` 为仍被使用的 key 集合。
     pub fn gc(&self, referenced: &HashSet<String>) -> Result<GcReport> {
         let mut report = GcReport {
@@ -119,7 +137,7 @@ impl Cache {
                 report.kept += 1;
                 continue;
             }
-            let size = dir_size(&path);
+            let size = directory_size(&path);
             fs::remove_dir_all(&path).map_err(|e| cache_io("删除缓存目录失败", &path, e))?;
             report.removed += 1;
             report.freed_bytes += size;
@@ -141,7 +159,8 @@ fn safe_component(key: &str) -> String {
     }
 }
 
-fn dir_size(path: &Path) -> u64 {
+/// 目录内文件大小合计（不递归子目录；缓存目录结构为单层文件）。
+pub fn directory_size(path: &Path) -> u64 {
     let mut total = 0;
     if let Ok(entries) = fs::read_dir(path) {
         for entry in entries.flatten() {

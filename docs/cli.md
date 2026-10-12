@@ -300,6 +300,53 @@ tts batch retry  --project ./works/rainy-station --json   # 失败行重置为 p
 - `status` Schema：[`batch-status`](../schemas/cli/batch-status.schema.json)
 - `retry` Schema：[`batch-retry`](../schemas/cli/batch-retry.schema.json)；无失败条目时返回 `reset: 0`（成功）。
 
+### `tts takes`
+
+Take 管理：`list` / `select`。
+
+```bash
+tts takes list --project ./works/rainy-station --line L3f2a9c01 --json   # 可按行过滤
+tts takes select --project ./works/rainy-station --line L3f2a9c01 --take 0002
+```
+
+- `list` 输出每条 take 的 `selected`（是否当前选用）与 `exists`（文件是否存在）。Schema：[`takes-list`](../schemas/cli/takes-list.schema.json)
+- `select` 设置 `selected_take`（导出使用选中 take）。不存在的行/take → `E_NOT_FOUND`。Schema：[`takes-select`](../schemas/cli/takes-select.schema.json)
+
+### `tts cast`
+
+同句多音色对比（选角）：对同一行文本、使用多个音色各生成一条 take。
+
+```bash
+tts cast --project ./works/rainy-station --line L3f2a9c01 --voices 冰糖,茉莉,苏打 --json
+```
+
+- 风格取 `--style`，缺省时用「行级覆盖 > 角色绑定」。
+- 任一音色失败即中止（已生成的 take 保留）；成功结果 Schema：[`cast`](../schemas/cli/cast.schema.json)
+
+### `tts usage`
+
+用量统计（聚合 `audit/audit.jsonl`）。
+
+```bash
+tts usage --since 2026-10 --json
+```
+
+- `--since` 为时间戳前缀过滤（`2026-10` / `2026-10-12`）。
+- 输出：请求数 / 成功 / 失败 / 缓存命中、字符数、音频总时长、按命令与模型分布、缓存命中率、费用备注。Schema：[`usage`](../schemas/cli/usage.schema.json)
+
+### `tts gc`
+
+清理**未被任何项目引用**的缓存目录（`cache/<key16>/`）。
+
+```bash
+tts gc --dry-run --json     # 预览
+tts gc --json               # 执行
+tts gc --project ./works/rainy-station --json   # 额外扫描指定项目（默认扫描 <工作区>/projects/*）
+```
+
+- 引用来源：项目 `lines.json` 中各 take 的 `cache_key`。
+- Schema：[`gc`](../schemas/cli/gc.schema.json)
+
 ---
 
 ## 计划中命令（🚧 M1 / M2）
@@ -313,8 +360,4 @@ tts batch retry  --project ./works/rainy-station --json   # 失败行重置为 p
 | `tts design solidify --take <id> --name <名>` | 设计 → 克隆固化（保证跨句一致） |
 | `tts clone --sample <文件> --name <名>` | 创建克隆音色（≤10MB、wav/mp3、base64 data URL） |
 | `tts project rm` | 删除项目（需 `--yes`） |
-| `tts takes list\|select --line <id>` | Take 列表与选用 |
-| `tts cast --line <id> --voices <a,b,c>` | 同句多音色对比（选角） |
-| `tts export [--format mp3] [--layout role\|scene\|flat] [--concat] [--manifest]` | 导出（逐行文件 / 分目录 / 整轨 / 清单） |
-| `tts usage [--since YYYY-MM]` | 用量统计（来自审计日志） |
-| `tts gc` | 清理未引用缓存与孤儿 take |
+| `tts export [--format mp3] [--layout role\|scene\|flat] [--concat]` | 导出（逐行文件 / 分目录 / 整轨 / 清单） |

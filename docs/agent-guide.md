@@ -83,9 +83,15 @@ tts batch --project ./works/rainy-station --json --events jsonl     # 事件流 
 tts batch status --project ./works/rainy-station --json             # 查看失败行
 tts batch retry  --project ./works/rainy-station                    # 重置失败行后重跑 batch
 
-# 5) Take 与导出（🚧 M1 后续）
-tts takes list --project ./works/rainy-station --line L3f2a9c01 --json
-tts export --project ./works/rainy-station --format mp3 --layout role --concat --manifest --json
+# 5) Take 与用量（✅）
+tts takes list --project ./works/rainy-station --line L3f2a9c01 --json   # 查看 selected / exists
+tts takes select --project ./works/rainy-station --line L3f2a9c01 --take 0002
+tts cast --project ./works/rainy-station --line L3f2a9c01 --voices 冰糖,茉莉,苏打 --json  # 选角对比
+tts usage --since 2026-10 --json
+tts gc --dry-run --json
+
+# 6) 导出（🚧 M1 最后一步）
+tts export --project ./works/rainy-station --format mp3 --layout role --concat --json
 ```
 
 要点：

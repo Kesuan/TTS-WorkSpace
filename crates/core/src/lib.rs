@@ -16,6 +16,7 @@ pub mod project;
 pub mod provider;
 pub mod script;
 pub mod synth;
+pub mod usage;
 pub mod util;
 pub mod voices;
 

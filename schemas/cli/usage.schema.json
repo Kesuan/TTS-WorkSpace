@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/usage.schema.json",
+  "title": "tts usage --json 成功输出",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": ["audit_file", "since", "summary"],
+      "properties": {
+        "audit_file": { "type": "string", "minLength": 1 },
+        "since": { "type": ["string", "null"] },
+        "summary": {
+          "type": "object",
+          "required": [
+            "requests",
+            "ok",
+            "failed",
+            "cached",
+            "chars",
+            "audio_duration_ms",
+            "latency_ms_total",
+            "cache_hit_rate",
+            "by_cmd",
+            "by_model",
+            "cost_note"
+          ],
+          "properties": {
+            "requests": { "type": "integer", "minimum": 0 },
+            "ok": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 },
+            "cached": { "type": "integer", "minimum": 0 },
+            "chars": { "type": "integer", "minimum": 0 },
+            "audio_duration_ms": { "type": "integer", "minimum": 0 },
+            "latency_ms_total": { "type": "integer", "minimum": 0 },
+            "cache_hit_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+            "by_cmd": {
+              "type": "object",
+              "additionalProperties": { "type": "integer", "minimum": 0 }
+            },
+            "by_model": {
+              "type": "object",
+              "additionalProperties": { "type": "integer", "minimum": 0 }
+            },
+            "first_ts": { "type": "string" },
+            "last_ts": { "type": "string" },
+            "cost_note": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

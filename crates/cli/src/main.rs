@@ -5,6 +5,7 @@
 //! - 非 `--json`：成功输出到 stdout（人类可读），失败输出到 stderr；
 //! - 退出码：0 成功 / 1 运行时失败 / 2 用法与校验错误 / 3 部分失败 / 4 需要确认。
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,7 +15,7 @@ use serde_json::{json, Value};
 
 use tts_core::audit::{self, AuditRecord};
 use tts_core::batch::{self, BatchEvent, BatchOptions};
-use tts_core::cache::Cache;
+use tts_core::cache::{directory_size, Cache};
 use tts_core::config::{mask_secret, Config, ENV_API_KEY};
 use tts_core::doctor::{self, CheckStatus};
 use tts_core::error::{
@@ -26,6 +27,7 @@ use tts_core::project::{Project, STATUS_FAILED, STATUS_OK, STATUS_PENDING, STATU
 use tts_core::provider::AudioFormat;
 use tts_core::script::ParseOptions;
 use tts_core::synth::{self, SynthOptions};
+use tts_core::usage;
 use tts_core::voices::parse_voice_ref;
 
 #[derive(Parser, Debug)]
@@ -71,6 +73,14 @@ enum Command {
     Line(LineArgs),
     /// 批量生成（并发 / 重试 / 幂等续跑 / 事件流）
     Batch(BatchArgs),
+    /// Take 管理（列表 / 选用）
+    Takes(TakesArgs),
+    /// 同句多音色对比（选角）
+    Cast(CastArgs),
+    /// 用量统计（来自审计日志）
+    Usage(UsageArgs),
+    /// 清理未被引用的缓存
+    Gc(GcArgs),
     /// 合成单条语音（缓存去重；可联动项目行写入 take）
     Synth(SynthArgs),
     /// 打印版本信息
@@ -257,6 +267,76 @@ enum BatchCmd {
 }
 
 #[derive(Args, Debug)]
+struct TakesArgs {
+    #[command(subcommand)]
+    cmd: TakesCmd,
+}
+
+#[derive(Subcommand, Debug)]
+enum TakesCmd {
+    /// 列出 take（可选按行过滤）
+    List {
+        /// 项目目录
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+        /// 仅列出指定行的 take
+        #[arg(long)]
+        line: Option<String>,
+    },
+    /// 选用 take（设置 selected_take）
+    Select {
+        /// 项目目录
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+        /// 行 ID
+        #[arg(long)]
+        line: String,
+        /// take ID（如 0002）
+        #[arg(long)]
+        take: String,
+    },
+}
+
+#[derive(Args, Debug)]
+struct CastArgs {
+    /// 项目目录
+    #[arg(long, default_value = ".")]
+    project: PathBuf,
+    /// 行 ID
+    #[arg(long)]
+    line: String,
+    /// 参与对比的音色（逗号分隔，如 冰糖,茉莉,苏打）
+    #[arg(long)]
+    voices: String,
+    /// 风格指令（默认取行级覆盖 / 角色绑定）
+    #[arg(long)]
+    style: Option<String>,
+    /// 跳过缓存
+    #[arg(long)]
+    no_cache: bool,
+    /// 模型 ID（默认取配置 models.tts）
+    #[arg(long)]
+    model: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct UsageArgs {
+    /// 时间戳前缀过滤（如 2026-10、2026-10-12）
+    #[arg(long)]
+    since: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct GcArgs {
+    /// 额外扫描的项目目录（可重复）；默认扫描 <工作区>/projects/*
+    #[arg(long = "project")]
+    project: Vec<PathBuf>,
+    /// 只预览将删除的内容，不实际删除
+    #[arg(long)]
+    dry_run: bool,
+}
+
+#[derive(Args, Debug)]
 struct SynthArgs {
     /// 待合成文本（使用 --line 时可省略，取行文本）
     #[arg(long)]
@@ -352,6 +432,10 @@ async fn execute(cli: &Cli) -> Result<CmdOutput> {
         Command::Role(args) => cmd_role(args),
         Command::Line(args) => cmd_line(args),
         Command::Batch(args) => cmd_batch(cli, args).await,
+        Command::Takes(args) => cmd_takes(args),
+        Command::Cast(args) => cmd_cast(args).await,
+        Command::Usage(args) => cmd_usage(args),
+        Command::Gc(args) => cmd_gc(args),
         Command::Synth(args) => cmd_synth(args).await,
         Command::Version => cmd_version(),
     }
@@ -1095,6 +1179,320 @@ fn render_batch_event(event: &BatchEvent) -> String {
             *total_duration_ms as f64 / 1000.0
         ),
     }
+}
+
+fn cmd_takes(args: &TakesArgs) -> Result<CmdOutput> {
+    match &args.cmd {
+        TakesCmd::List {
+            project: project_dir,
+            line,
+        } => {
+            let project = Project::open(project_dir)?;
+            let lines = project.load_lines()?;
+            if let Some(filter) = line {
+                if lines.find(filter).is_none() {
+                    return Err(TtsError::runtime(
+                        E_NOT_FOUND,
+                        format!("未找到行：{filter}"),
+                    ));
+                }
+            }
+
+            let mut entries: Vec<Value> = Vec::new();
+            for entry in &lines.lines {
+                if let Some(filter) = line {
+                    if entry.id != *filter {
+                        continue;
+                    }
+                }
+                for take in &entry.takes {
+                    let path = project.root.join(&take.file);
+                    entries.push(json!({
+                        "line_id": entry.id,
+                        "role": entry.role,
+                        "line_status": entry.status,
+                        "take_id": take.take_id,
+                        "file": take.file,
+                        "duration_ms": take.duration_ms,
+                        "chars": take.chars,
+                        "created_at": take.created_at,
+                        "selected": entry.selected_take.as_deref() == Some(take.take_id.as_str()),
+                        "exists": path.is_file(),
+                    }));
+                }
+            }
+
+            let data = json!({
+                "project": project.root.display().to_string(),
+                "line_id": line,
+                "total": entries.len(),
+                "takes": entries,
+            });
+            let human = if entries.is_empty() {
+                "暂无 take".to_string()
+            } else {
+                let mut text = format!("共 {} 个 take：", entries.len());
+                for entry in &entries {
+                    let mark = if entry["selected"].as_bool().unwrap_or(false) {
+                        "★"
+                    } else {
+                        " "
+                    };
+                    text.push_str(&format!(
+                        "\n  {mark} {} {} {}",
+                        entry["line_id"].as_str().unwrap_or(""),
+                        entry["take_id"].as_str().unwrap_or(""),
+                        entry["file"].as_str().unwrap_or(""),
+                    ));
+                }
+                text
+            };
+            Ok(CmdOutput { data, human })
+        }
+        TakesCmd::Select {
+            project: project_dir,
+            line,
+            take,
+        } => {
+            let project = Project::open(project_dir)?;
+            let mut lines = project.load_lines()?;
+            let previous;
+            {
+                let entry = lines
+                    .find_mut(line)
+                    .ok_or_else(|| TtsError::runtime(E_NOT_FOUND, format!("未找到行：{line}")))?;
+                if !entry.takes.iter().any(|item| item.take_id == *take) {
+                    let available: Vec<String> = entry
+                        .takes
+                        .iter()
+                        .map(|item| item.take_id.clone())
+                        .collect();
+                    let hint = if available.is_empty() {
+                        "该行尚未生成任何 take".to_string()
+                    } else {
+                        format!("可用 take：{}", available.join(", "))
+                    };
+                    return Err(TtsError::runtime(
+                        E_NOT_FOUND,
+                        format!("行 {line} 没有 take {take}"),
+                    )
+                    .with_hint(hint));
+                }
+                previous = entry.selected_take.clone();
+                entry.selected_take = Some(take.clone());
+            }
+            project.save_lines(&lines)?;
+            let data = json!({
+                "project": project.root.display().to_string(),
+                "line_id": line,
+                "take_id": take,
+                "previous_selected": previous,
+            });
+            let human = format!("已选用 take {take}（行 {line}）");
+            Ok(CmdOutput { data, human })
+        }
+    }
+}
+
+async fn cmd_cast(args: &CastArgs) -> Result<CmdOutput> {
+    let paths = Paths::resolve()?;
+    let config = Config::load(&paths.config_file)?;
+    paths.ensure_layout()?;
+
+    let project = Project::open(&args.project)?;
+    let mut lines = project.load_lines()?;
+    let (text, resolved_style) = {
+        let entry = lines
+            .find(&args.line)
+            .ok_or_else(|| TtsError::runtime(E_NOT_FOUND, format!("未找到行：{}", args.line)))?;
+        if entry.status == STATUS_REMOVED {
+            return Err(TtsError::usage(
+                E_USAGE,
+                format!("行已被标记 removed：{}", args.line),
+            ));
+        }
+        (
+            entry.text.clone(),
+            args.style.clone().or_else(|| project.resolve_style(entry)),
+        )
+    };
+
+    let voices: Vec<String> = args
+        .voices
+        .split(',')
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect();
+    if voices.is_empty() {
+        return Err(TtsError::usage(
+            E_USAGE,
+            "--voices 不能为空（逗号分隔音色列表）",
+        ));
+    }
+
+    let client = MimoClient::from_config(&config)?;
+    let cache = Cache::new(paths.cache_dir());
+    let model = args
+        .model
+        .clone()
+        .unwrap_or_else(|| config.models.tts.clone());
+
+    let mut results: Vec<Value> = Vec::new();
+    for voice_spec in &voices {
+        let voice = parse_voice_ref(voice_spec)?;
+        let options = SynthOptions {
+            model: model.clone(),
+            text: text.clone(),
+            voice,
+            instructions: resolved_style.clone(),
+            format: AudioFormat::Wav,
+            stream: false,
+            use_cache: !args.no_cache,
+        };
+        let outcome = synth::synthesize(&client, &cache, &options).await?;
+        let (_, take_id) = project.append_take(
+            &mut lines,
+            &args.line,
+            &outcome.audio,
+            &outcome.cache_key,
+            outcome.chars,
+            outcome.duration_ms,
+        )?;
+        project.save_lines(&lines)?;
+        let file = lines
+            .find(&args.line)
+            .and_then(|entry| entry.takes.last())
+            .map(|take| take.file.clone())
+            .unwrap_or_default();
+
+        let mut record = AuditRecord::ok("cast", &model);
+        record.project = Some(project.root.display().to_string());
+        record.line_id = Some(args.line.clone());
+        record.voice = Some(voice_spec.clone());
+        record.chars = outcome.chars;
+        record.duration_ms = outcome.duration_ms;
+        record.latency_ms = outcome.latency_ms;
+        record.cached = outcome.cached;
+        record.cost_note = Some("tts:free".to_string());
+        audit::append(&paths.audit_file(), &record)?;
+
+        results.push(json!({
+            "voice": voice_spec,
+            "take_id": take_id,
+            "file": file,
+            "duration_ms": outcome.duration_ms,
+            "latency_ms": outcome.latency_ms,
+            "cached": outcome.cached,
+        }));
+    }
+
+    let data = json!({
+        "project": project.root.display().to_string(),
+        "line_id": args.line,
+        "text": text,
+        "results": results,
+    });
+    let human = format!(
+        "已为行 {} 生成 {} 个音色的 take（用 `tts takes list` 查看）",
+        args.line,
+        voices.len()
+    );
+    Ok(CmdOutput { data, human })
+}
+
+fn cmd_usage(args: &UsageArgs) -> Result<CmdOutput> {
+    let paths = Paths::resolve()?;
+    let records = audit::read_all(&paths.audit_file())?;
+    let summary = usage::summarize(&records, args.since.as_deref());
+    let data = json!({
+        "audit_file": paths.audit_file().display().to_string(),
+        "since": args.since,
+        "summary": summary,
+    });
+    let human = format!(
+        "请求 {}（ok {} / failed {} / 缓存 {}），字符 {}，音频 {:.1}s，缓存命中率 {:.1}%",
+        summary.requests,
+        summary.ok,
+        summary.failed,
+        summary.cached,
+        summary.chars,
+        summary.audio_duration_ms as f64 / 1000.0,
+        summary.cache_hit_rate * 100.0,
+    );
+    Ok(CmdOutput { data, human })
+}
+
+fn cmd_gc(args: &GcArgs) -> Result<CmdOutput> {
+    let paths = Paths::resolve()?;
+    paths.ensure_layout()?;
+
+    let mut project_dirs: Vec<PathBuf> = args.project.clone();
+    let default_root = paths.projects_dir();
+    if default_root.is_dir() {
+        let mut children: Vec<PathBuf> = fs::read_dir(&default_root)
+            .map_err(|e| {
+                TtsError::runtime(
+                    E_IO,
+                    format!("无法读取项目目录 {}：{e}", default_root.display()),
+                )
+            })?
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.join("lines.json").is_file())
+            .collect();
+        children.sort();
+        project_dirs.extend(children);
+    }
+
+    let mut referenced: HashSet<String> = HashSet::new();
+    let mut scanned = 0usize;
+    for dir in &project_dirs {
+        let project = Project::open(dir)?;
+        let lines = project.load_lines()?;
+        referenced.extend(usage::referenced_cache_keys(&lines));
+        scanned += 1;
+    }
+
+    let cache = Cache::new(paths.cache_dir());
+    let (removed, freed_bytes, kept, dry_run) = if args.dry_run {
+        let mut removed = 0u64;
+        let mut freed = 0u64;
+        let mut kept = 0u64;
+        for key in cache.keys()? {
+            if referenced.contains(&key) {
+                kept += 1;
+            } else {
+                removed += 1;
+                freed += directory_size(&cache.dir_for(&key));
+            }
+        }
+        (removed, freed, kept, true)
+    } else {
+        let report = cache.gc(&referenced)?;
+        (report.removed, report.freed_bytes, report.kept, false)
+    };
+
+    let data = json!({
+        "cache_dir": cache.root().display().to_string(),
+        "scanned_projects": scanned,
+        "referenced_keys": referenced.len(),
+        "removed": removed,
+        "freed_bytes": freed_bytes,
+        "kept": kept,
+        "dry_run": dry_run,
+    });
+    let human = if dry_run {
+        format!(
+            "[预览] 将删除 {removed} 个未引用缓存（约 {:.1} MB），保留 {kept} 个",
+            freed_bytes as f64 / 1024.0 / 1024.0
+        )
+    } else {
+        format!(
+            "已删除 {removed} 个未引用缓存（释放 {:.1} MB），保留 {kept} 个",
+            freed_bytes as f64 / 1024.0 / 1024.0
+        )
+    };
+    Ok(CmdOutput { data, human })
 }
 
 fn is_secret_key(key: &str) -> bool {

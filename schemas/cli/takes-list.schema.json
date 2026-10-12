@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/takes-list.schema.json",
+  "title": "tts takes list --json 成功输出",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": ["project", "line_id", "total", "takes"],
+      "properties": {
+        "project": { "type": "string", "minLength": 1 },
+        "line_id": { "type": ["string", "null"] },
+        "total": { "type": "integer", "minimum": 0 },
+        "takes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "line_id",
+              "role",
+              "line_status",
+              "take_id",
+              "file",
+              "duration_ms",
+              "chars",
+              "created_at",
+              "selected",
+              "exists"
+            ],
+            "properties": {
+              "line_id": { "type": "string", "minLength": 1 },
+              "role": { "type": "string", "minLength": 1 },
+              "line_status": { "enum": ["pending", "ok", "failed", "removed"] },
+              "take_id": { "type": "string", "minLength": 1 },
+              "file": { "type": "string", "minLength": 1 },
+              "duration_ms": { "type": "integer", "minimum": 0 },
+              "chars": { "type": "integer", "minimum": 0 },
+              "created_at": { "type": "string" },
+              "selected": { "type": "boolean" },
+              "exists": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

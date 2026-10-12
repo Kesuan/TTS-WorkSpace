@@ -55,13 +55,19 @@ tts batch --project ./works/rainy-station --json --events jsonl    # 幂等；�
 tts batch status --project ./works/rainy-station --json
 tts batch retry  --project ./works/rainy-station                   # 重置失败行
 
+# Take / 选角 / 用量 / 清理（M1）
+tts takes list --project ./works/rainy-station --json
+tts takes select --project ./works/rainy-station --line L3f2a9c01 --take 0002
+tts cast --project ./works/rainy-station --line L3f2a9c01 --voices 冰糖,茉莉
+tts usage --since 2026-10 --json
+tts gc --dry-run --json
+
 # 单条合成（幂等缓存 + 审计；--line 联动项目 take）
 tts synth --text "早上好！" --voice 冰糖 --json
 tts synth --project ./works/rainy-station --line L3f2a9c01 --voice 冰糖 --style "(低沉)"
 ```
 
-计划中（M1 后续，见 [docs/cli.md](docs/cli.md)）：
-`takes` · `cast` · `export` · `usage` · `gc`；M2：`voice` · `design` · `clone`。
+计划中（M1 最后一步）：`export`；M2：`voice` · `design` · `clone`。
 
 ## 仓库结构
 

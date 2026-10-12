@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/gc.schema.json",
+  "title": "tts gc --json 成功输出",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": [
+        "cache_dir",
+        "scanned_projects",
+        "referenced_keys",
+        "removed",
+        "freed_bytes",
+        "kept",
+        "dry_run"
+      ],
+      "properties": {
+        "cache_dir": { "type": "string", "minLength": 1 },
+        "scanned_projects": { "type": "integer", "minimum": 0 },
+        "referenced_keys": { "type": "integer", "minimum": 0 },
+        "removed": { "type": "integer", "minimum": 0 },
+        "freed_bytes": { "type": "integer", "minimum": 0 },
+        "kept": { "type": "integer", "minimum": 0 },
+        "dry_run": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -867,3 +867,161 @@ fn batch_partial_failure_then_retry_succeeds() {
     assert_eq!(stored["lines"][1]["status"], Value::from("ok"));
     assert_eq!(stored["lines"][1]["takes"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn takes_cast_select_contracts() {
+    let sandbox = Sandbox::new();
+    let server = support::MockServer::start(vec![
+        support::MockResponse::json(support::chat_response_with_wav(&support::tiny_wav())),
+        support::MockResponse::json(support::chat_response_with_wav(&support::tiny_wav())),
+        support::MockResponse::json(support::chat_response_with_wav(&support::tiny_wav())),
+    ]);
+    let (_, project_arg, ids) =
+        setup_project(&sandbox, "阿岚: 又是这样的雨……\n", &[("阿岚", "冰糖")]);
+    let line_id = ids[0].clone();
+
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "synth",
+            "--project",
+            &project_arg,
+            "--line",
+            &line_id,
+            "--voice",
+            "冰糖",
+        ],
+    );
+    assert_eq!(code, 0, "synth 失败：{json}");
+
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "takes",
+        "list",
+        "--project",
+        &project_arg,
+        "--line",
+        &line_id,
+    ]);
+    assert_eq!(code, 0, "{json}");
+    validate("cli/takes-list.schema.json", &json);
+    assert_eq!(json["data"]["total"], Value::from(1));
+    assert_eq!(json["data"]["takes"][0]["selected"], Value::Bool(true));
+    assert_eq!(json["data"]["takes"][0]["exists"], Value::Bool(true));
+
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "cast",
+            "--project",
+            &project_arg,
+            "--line",
+            &line_id,
+            "--voices",
+            "冰糖,茉莉",
+        ],
+    );
+    assert_eq!(code, 0, "cast 失败：{json}");
+    validate("cli/cast.schema.json", &json);
+    assert_eq!(json["data"]["results"].as_array().unwrap().len(), 2);
+    assert_eq!(json["data"]["results"][0]["take_id"], Value::from("0002"));
+    assert_eq!(json["data"]["results"][1]["take_id"], Value::from("0003"));
+
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "takes",
+        "list",
+        "--project",
+        &project_arg,
+        "--line",
+        &line_id,
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(json["data"]["total"], Value::from(3));
+
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "takes",
+        "select",
+        "--project",
+        &project_arg,
+        "--line",
+        &line_id,
+        "--take",
+        "0003",
+    ]);
+    assert_eq!(code, 0, "{json}");
+    validate("cli/takes-select.schema.json", &json);
+    assert_eq!(json["data"]["previous_selected"], Value::from("0001"));
+
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "takes",
+        "select",
+        "--project",
+        &project_arg,
+        "--line",
+        &line_id,
+        "--take",
+        "9999",
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(json["error"]["code"], Value::from("E_NOT_FOUND"));
+
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "takes",
+        "list",
+        "--project",
+        &project_arg,
+        "--line",
+        "L00000000",
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(json["error"]["code"], Value::from("E_NOT_FOUND"));
+}
+
+#[test]
+fn usage_and_gc_contracts() {
+    let sandbox = Sandbox::new();
+    let server = support::MockServer::start(vec![support::MockResponse::json(
+        support::chat_response_with_wav(&support::tiny_wav()),
+    )]);
+
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &["--json", "synth", "--text", "早上好", "--voice", "冰糖"],
+    );
+    assert_eq!(code, 0, "{json}");
+    let cache_key = json["data"]["cache_key"].as_str().unwrap().to_string();
+
+    let (code, json) = sandbox.run_json(&["--json", "usage"]);
+    assert_eq!(code, 0, "{json}");
+    validate("cli/usage.schema.json", &json);
+    assert_eq!(json["data"]["summary"]["requests"], Value::from(1));
+    assert_eq!(json["data"]["summary"]["by_cmd"]["synth"], Value::from(1));
+
+    let (code, json) = sandbox.run_json(&["--json", "gc", "--dry-run"]);
+    assert_eq!(code, 0, "{json}");
+    validate("cli/gc.schema.json", &json);
+    assert_eq!(json["data"]["dry_run"], Value::Bool(true));
+    assert_eq!(json["data"]["removed"], Value::from(1));
+    assert!(
+        sandbox.path().join("cache").join(&cache_key).is_dir(),
+        "预览模式不应删除"
+    );
+
+    let (code, json) = sandbox.run_json(&["--json", "gc"]);
+    assert_eq!(code, 0, "{json}");
+    assert_eq!(json["data"]["removed"], Value::from(1));
+    assert!(!sandbox.path().join("cache").join(&cache_key).is_dir());
+
+    let (code, json) = sandbox.run_json(&["--json", "gc"]);
+    assert_eq!(code, 0);
+    assert_eq!(json["data"]["removed"], Value::from(0));
+}
