@@ -40,6 +40,9 @@ impl MimoClient {
     ) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_millis(timeout_ms.max(1_000)))
+            // 实测：MiMo 在较大响应（如 voicedesign 的 ~500KB WAV）下 HTTP/2 流会被服务端中断，
+            // 强制 HTTP/1.1 可稳定传输（curl --http1.1 验证通过）。
+            .http1_only()
             .build()
             .map_err(|e| {
                 TtsError::runtime(E_HTTP_NETWORK, format!("HTTP 客户端初始化失败：{e}"))

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/voice-show.schema.json",
+  "title": "tts voice show --json 成功输出",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": ["library_dir", "voice"],
+      "properties": {
+        "library_dir": { "type": "string", "minLength": 1 },
+        "voice": {
+          "type": "object",
+          "required": ["id", "name", "kind", "builtin"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "name": { "type": "string", "minLength": 1 },
+            "kind": { "enum": ["preset", "design", "clone"] },
+            "builtin": { "type": "boolean" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

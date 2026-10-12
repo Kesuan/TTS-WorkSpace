@@ -20,6 +20,8 @@ pub struct SynthOptions {
     pub format: AudioFormat,
     pub stream: bool,
     pub use_cache: bool,
+    /// 智能润色目标文本（仅 voicedesign 模型）。
+    pub optimize_text_preview: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +47,11 @@ pub fn request_cache_key(options: &SynthOptions) -> String {
         &instructions,
         options.format.as_str(),
         if options.stream { "stream" } else { "oneshot" },
+        if options.optimize_text_preview {
+            "optimize"
+        } else {
+            "plain"
+        },
     ])
 }
 
@@ -90,7 +97,7 @@ pub async fn synthesize(
         instructions: options.instructions.clone(),
         voice: options.voice.clone(),
         format: options.format,
-        optimize_text_preview: false,
+        optimize_text_preview: options.optimize_text_preview,
     };
     let result = if options.stream {
         let mut sink = |_: &[u8]| {};
@@ -107,6 +114,7 @@ pub async fn synthesize(
         "duration_ms": result.duration_ms,
         "sample_rate": result.sample_rate,
         "stream": options.stream,
+        "optimize_text_preview": options.optimize_text_preview,
         "created_at": crate::util::now_rfc3339(),
     });
     cache.put(&key, &result.audio, &meta)?;
@@ -139,6 +147,7 @@ mod tests {
             format: AudioFormat::Wav,
             stream: false,
             use_cache: true,
+            optimize_text_preview: false,
         }
     }
 

@@ -1172,3 +1172,307 @@ fn export_mp3_role_layout_with_concat() {
     assert_eq!(manifest["concat"], Value::from("full.mp3"));
     assert_eq!(manifest["format"], Value::from("mp3"));
 }
+
+#[test]
+fn voice_library_design_clone_solidify_contracts() {
+    let sandbox = Sandbox::new();
+
+    // 预置音色列表（未创建任何库内音色）
+    let (code, json) = sandbox.run_json(&["--json", "voice", "list"]);
+    assert_eq!(code, 0, "{json}");
+    validate("cli/voice-list.schema.json", &json);
+    assert_eq!(json["data"]["total"], Value::from(9));
+    assert!(json["data"]["voices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|voice| voice["builtin"] == Value::Bool(true)));
+
+    let (code, json) = sandbox.run_json(&["--json", "voice", "show", "冰糖"]);
+    assert_eq!(code, 0, "{json}");
+    validate("cli/voice-show.schema.json", &json);
+    assert_eq!(json["data"]["voice"]["kind"], Value::from("preset"));
+
+    let (code, json) = sandbox.run_json(&["--json", "voice", "show", "不存在"]);
+    assert_eq!(code, 1);
+    assert_eq!(json["error"]["code"], Value::from("E_NOT_FOUND"));
+
+    // 克隆音色（本地样本）
+    let sample = sandbox.path().join("voice.wav");
+    std::fs::write(
+        &sample,
+        tts_core::audio::pcm16_to_wav(&vec![0u8; 4_800], 24_000).unwrap(),
+    )
+    .unwrap();
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "clone",
+        "--sample",
+        sample.to_str().unwrap(),
+        "--name",
+        "Yuki",
+    ]);
+    assert_eq!(code, 0, "{json}");
+    validate("cli/clone.schema.json", &json);
+    assert_eq!(json["data"]["kind"], Value::from("clone"));
+    assert!(json["data"]["sample_sha256"].is_string());
+
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "clone",
+        "--sample",
+        sample.to_str().unwrap(),
+        "--name",
+        "Yuki",
+    ]);
+    assert_eq!(code, 2, "重名应报用法错误：{json}");
+    assert_eq!(json["error"]["code"], Value::from("E_USAGE"));
+
+    // 设计音色（mock）
+    let server = support::MockServer::start(vec![support::MockResponse::json(
+        support::chat_response_with_wav(&support::tone_wav(500)),
+    )]);
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "design",
+            "--prompt",
+            "温柔的年轻女声",
+            "--text",
+            "试听文本",
+            "--name",
+            "设计音色A",
+        ],
+    );
+    assert_eq!(code, 0, "design 失败：{json}");
+    validate("cli/design.schema.json", &json);
+    let design_id = json["data"]["voice"]["id"].as_str().unwrap().to_string();
+
+    // 固化 → 克隆音色（记录来源）
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "design",
+        "solidify",
+        "--from",
+        &design_id,
+        "--name",
+        "固化音色",
+    ]);
+    assert_eq!(code, 0, "solidify 失败：{json}");
+    validate("cli/solidify.schema.json", &json);
+    assert_eq!(json["data"]["kind"], Value::from("clone"));
+    assert_eq!(json["data"]["source_voice"], Value::from(design_id.clone()));
+
+    // 库内音色可直接用于 synth（resolve → clone data URL）
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "synth",
+            "--text",
+            "用固化音色说一句",
+            "--voice",
+            "固化音色",
+        ],
+    );
+    assert_eq!(code, 0, "库内音色应可用于合成：{json}");
+
+    let (code, json) = sandbox.run_json(&["--json", "voice", "list", "--kind", "clone"]);
+    assert_eq!(code, 0, "{json}");
+    validate("cli/voice-list.schema.json", &json);
+    assert_eq!(json["data"]["total"], Value::from(2));
+
+    // 删除护栏：无 --yes → 退出码 4
+    let (code, json) = sandbox.run_json(&["--json", "voice", "rm", "Yuki"]);
+    assert_eq!(code, 4, "{json}");
+    assert_eq!(json["error"]["code"], Value::from("E_CONFIRM_REQUIRED"));
+
+    let (code, json) = sandbox.run_json(&["--json", "voice", "rm", "Yuki", "--yes"]);
+    assert_eq!(code, 0, "{json}");
+    validate("cli/voice-rm.schema.json", &json);
+
+    // 预置音色不可删除
+    let (code, json) = sandbox.run_json(&["--json", "voice", "rm", "冰糖", "--yes"]);
+    assert_eq!(code, 1);
+    assert_eq!(json["error"]["code"], Value::from("E_NOT_FOUND"));
+}
+
+#[test]
+fn library_voice_usable_in_project_batch() {
+    let sandbox = Sandbox::new();
+    let server = support::MockServer::start(vec![support::MockResponse::json(
+        support::chat_response_with_wav(&support::tone_wav(300)),
+    )]);
+
+    let sample = sandbox.path().join("s.wav");
+    std::fs::write(
+        &sample,
+        tts_core::audio::pcm16_to_wav(&vec![0u8; 4_800], 24_000).unwrap(),
+    )
+    .unwrap();
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "clone",
+        "--sample",
+        sample.to_str().unwrap(),
+        "--name",
+        "库音色",
+    ]);
+    assert_eq!(code, 0, "{json}");
+
+    let (_, project_arg, _) = setup_project(&sandbox, "阿岚: 一句台词\n", &[]);
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "role",
+        "bind",
+        "--role",
+        "阿岚",
+        "--voice",
+        "库音色",
+        "--project",
+        &project_arg,
+    ]);
+    assert_eq!(code, 0, "{json}");
+
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "batch",
+            "--project",
+            &project_arg,
+            "--concurrency",
+            "1",
+        ],
+    );
+    assert_eq!(code, 0, "绑定库内音色的批量应成功：{json}");
+    assert_eq!(json["data"]["summary"]["succeeded"], Value::from(1));
+}
+
+#[test]
+fn model_is_selected_by_voice_kind() {
+    let sandbox = Sandbox::new();
+    let server = support::MockServer::start(vec![support::MockResponse::json(
+        support::chat_response_with_wav(&support::tone_wav(200)),
+    )]);
+
+    // 预置音色 → mimo-v2.5-tts
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &["--json", "synth", "--text", "预置", "--voice", "冰糖"],
+    );
+    assert_eq!(code, 0, "{json}");
+    let body: Value = serde_json::from_str(&server.request_bodies()[0]).unwrap();
+    assert_eq!(body["model"], Value::from("mimo-v2.5-tts"));
+    assert_eq!(body["audio"]["voice"], Value::from("冰糖"));
+
+    // 库内克隆音色 → 自动切到 voiceclone 模型，且 voice 为 data URL
+    let sample = sandbox.path().join("m.wav");
+    std::fs::write(
+        &sample,
+        tts_core::audio::pcm16_to_wav(&vec![0u8; 4_800], 24_000).unwrap(),
+    )
+    .unwrap();
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "clone",
+        "--sample",
+        sample.to_str().unwrap(),
+        "--name",
+        "模型测试音色",
+    ]);
+    assert_eq!(code, 0, "{json}");
+
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "synth",
+            "--text",
+            "克隆",
+            "--voice",
+            "模型测试音色",
+        ],
+    );
+    assert_eq!(code, 0, "{json}");
+    let body: Value = serde_json::from_str(&server.request_bodies()[1]).unwrap();
+    assert_eq!(body["model"], Value::from("mimo-v2.5-tts-voiceclone"));
+    assert!(body["audio"]["voice"]
+        .as_str()
+        .unwrap()
+        .starts_with("data:audio/wav;base64,"));
+
+    // 内联设计引用 → 自动切到 voicedesign 模型，且省略 voice
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "synth",
+            "--text",
+            "设计",
+            "--voice",
+            "design:温柔女声",
+        ],
+    );
+    assert_eq!(code, 0, "{json}");
+    let body: Value = serde_json::from_str(&server.request_bodies()[2]).unwrap();
+    assert_eq!(body["model"], Value::from("mimo-v2.5-tts-voicedesign"));
+    assert!(body["audio"].get("voice").is_none());
+
+    // 显式 --model 优先于自动选择
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "synth",
+            "--text",
+            "显式模型",
+            "--voice",
+            "冰糖",
+            "--model",
+            "mimo-v2.5-tts-voiceclone",
+        ],
+    );
+    assert_eq!(code, 0, "{json}");
+    let body: Value = serde_json::from_str(&server.request_bodies()[3]).unwrap();
+    assert_eq!(body["model"], Value::from("mimo-v2.5-tts-voiceclone"));
+
+    // 批量：角色绑定克隆音色 → 每个请求同样使用 voiceclone 模型
+    let (_, project_arg, _) = setup_project(&sandbox, "阿岚: 批量克隆\n", &[]);
+    let (code, _) = sandbox.run_json(&[
+        "--json",
+        "role",
+        "bind",
+        "--role",
+        "阿岚",
+        "--voice",
+        "模型测试音色",
+        "--project",
+        &project_arg,
+    ]);
+    assert_eq!(code, 0);
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "batch",
+            "--project",
+            &project_arg,
+            "--concurrency",
+            "1",
+        ],
+    );
+    assert_eq!(code, 0, "{json}");
+    let bodies = server.request_bodies();
+    let batch_body: Value = serde_json::from_str(bodies.last().unwrap()).unwrap();
+    assert_eq!(batch_body["model"], Value::from("mimo-v2.5-tts-voiceclone"));
+}

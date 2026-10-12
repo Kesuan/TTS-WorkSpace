@@ -101,26 +101,33 @@ tts export --project ./works/rainy-station --format mp3 --layout role --concat -
 - 部分失败 → 退出码 **3**（`E_PARTIAL`），`error.details.failed_lines` 给出每行错误码；修复后 `batch retry` + 重跑即可（或直接重跑 batch，失败行会自动重试、ok 行自动跳过）。
 - `--events jsonl` 需同时 `--json`：事件逐行输出，**最后一行是统一信封**。
 
-### 3.2 音色设计 → 固化（保证跨句一致性）
+### 3.2 音色设计 → 固化（保证跨句一致性，✅）
 
 ```bash
-tts design --prompt "二十岁出头的年轻男声，音色清亮，略带鼻音，语速中等" --text "试听文本" --json
-# 挑选满意的 take 固化为克隆音色（避免设计模型每次生成不一致）
-tts design solidify --take <take_id> --name "小满" --json
-tts role bind --role 小满 --voice <voice_id>
+tts design --prompt "二十岁出头的年轻男声，音色清亮，略带鼻音，语速中等" --text "试听文本" --name "小满草稿" --json
+# 满意后固化（避免设计模型每次生成不一致）
+tts design solidify --from "小满草稿" --name "小满" --json
+tts role bind --role 小满 --voice "小满" --project ./works/rainy-station
 ```
 
-### 3.3 克隆既有声音
+### 3.3 克隆既有声音（✅）
 
 ```bash
 tts clone --sample ./voices/yuki.mp3 --name "Yuki" --json    # 校验：≤10MB，wav/mp3
+tts voice list --kind clone --json
 ```
 
-### 3.4 选角对比（Cast）
+### 3.4 选角对比（Cast，✅）
 
 ```bash
 tts cast --project ./works/rainy-station --line L3f2a9c01 --voices 冰糖,茉莉,苏打 --json
 ```
+
+### 3.5 音色模型约定
+
+- 名称解析：预置音色 → 音色库 → 报错（拼错请用 `tts voice list` 核对）。
+- 模型自动选择：预置 → `models.tts`；库内/内联 clone → `models.voiceclone`；design → `models.design`。显式 `--model` 优先。
+- 批量按**每行音色**分别选模型（可在同一批混用预置 + 克隆角色）。
 
 ## 4. 护栏（Agent 注意事项）
 

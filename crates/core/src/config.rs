@@ -95,6 +95,17 @@ impl Default for ModelsConfig {
     }
 }
 
+impl ModelsConfig {
+    /// 按音色类型选择默认模型：预置 → tts，设计 → voicedesign，克隆 → voiceclone。
+    pub fn for_voice(&self, voice: &crate::provider::VoiceRef) -> String {
+        match voice {
+            crate::provider::VoiceRef::Preset { .. } => self.tts.clone(),
+            crate::provider::VoiceRef::Design { .. } => self.design.clone(),
+            crate::provider::VoiceRef::Clone { .. } => self.clone.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct GenerationConfig {

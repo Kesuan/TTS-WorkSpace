@@ -202,7 +202,17 @@
 | `--project <目录>` | 项目目录（配合 `--line` 使用，默认当前目录） |
 | `--line <ID>` | 行 ID：写入 take、更新行状态与选中项 |
 
-**音色引用语法**：`<预置名或 ID>`（如 `冰糖`、`mimo_default`）· `preset:<名>` · `design:<音色描述>` · `clone:<音频文件路径>`（wav/mp3，base64 后 ≤10MB）。
+**音色引用语法**：
+
+| 写法 | 含义 |
+| --- | --- |
+| `<预置名或 ID>` | 预置音色（如 `冰糖`、`mimo_default`）或**音色库内名称/ID** |
+| `preset:<名>` | 显式预置音色（MiMo 新增预置音色可用它直通） |
+| `design:<音色描述>` | 内联文本设计音色 |
+| `clone:<音频文件路径>` | 内联克隆（wav/mp3，base64 后 ≤10MB） |
+
+- 名称解析顺序：预置音色 → 音色库（design/clone/preset）→ 报 `E_NOT_FOUND`（附 `tts voice list` 提示）。
+- **模型按音色类型自动选择**：预置 → `models.tts`；设计/克隆 → `models.voiceclone` / `models.design`；显式 `--model` 优先。
 
 ```json
 {
@@ -240,6 +250,7 @@ tts role bind --role 阿岚 --voice 冰糖 --style "年轻的清亮女声，语�
 ```
 
 - 至少需要 `--voice` 或 `--style` 之一（否则 `E_USAGE`）。
+- `--voice` 会在绑定前先校验可解析（预置 / 音色库 / 内联语法），拼错立即报 `E_NOT_FOUND`。
 - Schema：[`role-bind`](../schemas/cli/role-bind.schema.json)
 
 ### `tts line set`
@@ -393,16 +404,63 @@ tts gc --project ./works/rainy-station --json   # 额外扫描指定项目（默
 }
 ```
 
+### `tts voice`
+
+音色库：`list` / `show` / `rm`。
+
+```bash
+tts voice list --json                 # 预置 + 库内音色
+tts voice list --kind clone --json    # 仅克隆音色
+tts voice show 雨夜女主 --json
+tts voice rm 雨夜女主 --yes           # 需 --yes（预置音色不可删除）
+```
+
+- `list` 输出每个音色的 `kind`（preset/design/clone）、`builtin`、`has_sample`、`sample_file`、`design_prompt`、`source_voice` 等。
+- Schema：[`voice-list`](../schemas/cli/voice-list.schema.json) · [`voice-show`](../schemas/cli/voice-show.schema.json) · [`voice-rm`](../schemas/cli/voice-rm.schema.json)
+
+### `tts design`
+
+文本设计音色（voicedesign 模型）；`--name` 时把生成音频留档并入库（`kind=design`）。
+
+```bash
+tts design --prompt "二十岁出头的年轻女声，清亮偏薄" --text "试听文本" --name "雨夜女主" --json
+tts design --prompt "…" --text "…" --optimize-text-preview --out ./draft.wav
+```
+
+- Schema：[`design`](../schemas/cli/design.schema.json)
+- 注意：voicedesign 每次生成可能有差异；**建议随后固化**（见下）。
+
+### `tts design solidify`
+
+把设计音色固化为克隆音色（跨句一致性）：
+
+```bash
+tts design solidify --from 雨夜女主 --name 雨夜女主-固化 --json
+tts design solidify --from ./draft.wav --name 手工固化        # 也可直接给音频文件
+```
+
+- 生成 `kind=clone` 的音色并记录 `source_voice`；此后用该音色即固定音色。
+- Schema：[`solidify`](../schemas/cli/solidify.schema.json)
+
+### `tts clone`
+
+用音频样本创建克隆音色（wav/mp3、base64 后 ≤10MB）：
+
+```bash
+tts clone --sample ./voices/yuki.mp3 --name Yuki --json
+```
+
+- Schema：[`clone`](../schemas/cli/clone.schema.json)
+
 ---
 
-## 计划中命令（🚧 M2）
+## 后续计划（🚧）
 
 > 以下命令尚未实现，接口可能微调；实现后将补全参数表与 Schema。
 
-| 命令 | 说明 |
+| 项 | 说明 |
 | --- | --- |
-| `tts voice list\|show\|rm` | 全局音色库（预置 / 设计 / 克隆） |
-| `tts design --prompt … --text … [--optimize-text-preview]` | 文本设计音色并试听 |
-| `tts design solidify --take <id> --name <名>` | 设计 → 克隆固化（保证跨句一致） |
-| `tts clone --sample <文件> --name <名>` | 创建克隆音色（≤10MB、wav/mp3、base64 data URL） |
 | `tts project rm` | 删除项目（需 `--yes`） |
+| `--play` | 合成后本机播放（当前请直接播放输出文件） |
+| M3 GUI | Tauri + React + animal-island-ui（试听 / 对比 / 批量监控） |
+| M4 候选 | ASR 回读校验、MCP Server、打包分发 |

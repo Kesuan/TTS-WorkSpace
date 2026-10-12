@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/design.schema.json",
+  "title": "tts design --json 成功输出",
+  "type": "object",
+  "required": [
+    "ok",
+    "data"
+  ],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": [
+        "output",
+        "model",
+        "chars",
+        "duration_ms",
+        "latency_ms",
+        "cached",
+        "cache_key",
+        "optimize_text_preview",
+        "voice",
+        "prompt"
+      ],
+      "properties": {
+        "output": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "chars": { "type": "integer", "minimum": 0 },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "latency_ms": { "type": "integer", "minimum": 0 },
+        "cached": { "type": "boolean" },
+        "cache_key": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+        "optimize_text_preview": { "type": "boolean" },
+        "voice": {
+          "type": ["object", "null"],
+          "required": ["id", "name", "sample_file"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "name": { "type": "string", "minLength": 1 },
+            "sample_file": { "type": ["string", "null"] }
+          },
+          "additionalProperties": false
+        },
+        "prompt": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

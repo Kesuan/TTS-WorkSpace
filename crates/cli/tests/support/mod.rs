@@ -5,7 +5,7 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 pub struct MockResponse {
@@ -44,6 +44,7 @@ pub struct MockServer {
     /// 形如 `http://127.0.0.1:PORT/v1`。
     pub base_url: String,
     requests: Arc<AtomicUsize>,
+    bodies: Arc<Mutex<Vec<String>>>,
     _handle: thread::JoinHandle<()>,
 }
 
@@ -53,13 +54,16 @@ impl MockServer {
         let listener = TcpListener::bind("127.0.0.1:0").expect("绑定 mock 端口失败");
         let port = listener.local_addr().expect("读取端口失败").port();
         let requests = Arc::new(AtomicUsize::new(0));
+        let bodies: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let counter = Arc::clone(&requests);
+        let captured = Arc::clone(&bodies);
         let handle = thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
-                if !read_request(&mut stream) {
+                let Some(body) = read_request(&mut stream) else {
                     continue;
-                }
+                };
+                captured.lock().expect("锁失败").push(body);
                 let index = counter.fetch_add(1, Ordering::SeqCst);
                 let response = responses.get(index).or_else(|| responses.last());
                 let Some(response) = response else { continue };
@@ -69,6 +73,7 @@ impl MockServer {
         Self {
             base_url: format!("http://127.0.0.1:{port}/v1"),
             requests,
+            bodies,
             _handle: handle,
         }
     }
@@ -76,16 +81,22 @@ impl MockServer {
     pub fn request_count(&self) -> usize {
         self.requests.load(Ordering::SeqCst)
     }
+
+    /// 捕获到的请求体（JSON 字符串，按到达顺序）。
+    pub fn request_bodies(&self) -> Vec<String> {
+        self.bodies.lock().expect("锁失败").clone()
+    }
 }
 
-fn read_request(stream: &mut TcpStream) -> bool {
+/// 读取一个请求，返回请求体（读取失败返回 `None`）。
+fn read_request(stream: &mut TcpStream) -> Option<String> {
     let mut buffer = Vec::new();
     let mut temp = [0u8; 4096];
     loop {
         match stream.read(&mut temp) {
-            Ok(0) => return false,
+            Ok(0) => return None,
             Ok(n) => buffer.extend_from_slice(&temp[..n]),
-            Err(_) => return false,
+            Err(_) => return None,
         }
         if let Some(header_end) = find_header_end(&buffer) {
             let headers = String::from_utf8_lossy(&buffer[..header_end]).to_string();
@@ -101,7 +112,10 @@ fn read_request(stream: &mut TcpStream) -> bool {
                 })
                 .unwrap_or(0);
             if buffer.len() - header_end >= content_length {
-                return true;
+                return Some(
+                    String::from_utf8_lossy(&buffer[header_end..header_end + content_length])
+                        .to_string(),
+                );
             }
         }
     }

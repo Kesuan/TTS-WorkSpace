@@ -8,7 +8,7 @@
 ```
 ~/.tts-workbench/                     # 工作区根（TTS_WORKSPACE_ROOT）
 ├─ config.json                        # ✅ 配置（Unix 权限 0600）
-├─ library/                           # 🚧 全局音色库
+├─ library/                           # ✅ 全局音色库
 │  └─ voices/<voice_id>/              #    voice.json + sample.wav|mp3
 ├─ cache/                             # ✅ 内容寻址缓存
 │  └─ <key16>/                        #    blob.wav + meta.json
@@ -53,30 +53,32 @@
 - `blob.wav`：音频内容；`meta.json`：请求指纹与生成参数。
 - 命中即复用（相同参数不重复请求、不重复等待）；清理用 `tts gc`（🚧 M1，删除未被引用的目录）。
 
-## 音色库 🚧（M2）
+## 音色库 ✅
 
-`library/voices/<voice_id>/voice.json`：
+`library/voices/<voice_id>/`（`voice.json` + 样本文件）：
 
 ```json
 {
   "schema_version": 1,
-  "id": "yuki-d3f2a1",
+  "id": "yuki-38c6e8",
   "name": "Yuki",
-  "type": "preset | design | clone",
+  "kind": "preset | design | clone",
   "model": "mimo-v2.5-tts-voiceclone",
   "preset_name": "冰糖",
   "design_prompt": "温柔但有距离感的年轻女声…",
-  "source_take_id": "…",
-  "sample_file": "sample.mp3",
+  "source_voice": "voice-a24655",
+  "sample_file": "sample.wav",
   "sample_sha256": "…",
   "tags": ["主角"],
-  "notes": "M2 固化自 design take",
+  "notes": "由 design 固化而来",
   "created_at": "2026-10-12T09:00:00Z"
 }
 ```
 
-- `type=design`：`design_prompt` 是音色来源；**建议先 `design solidify` 固化为克隆样本再批量使用**（设计模型每次生成可能不一致）。
-- `type=clone`：`sample_file` 为 ≤10MB 的 wav/mp3；请求时编码为 `data:audio/...;base64,…`。
+- `id`：`<名称 ascii 前缀或 voice>-<内容哈希前 6 位>`（稳定、可读）。
+- `kind=design`：`design_prompt` 定义音色；`sample_file` 为试听留档。
+- `kind=clone`：`sample_file`（≤10MB wav/mp3）定义音色；`source_voice` 记录固化来源。
+- 解析优先级（`tts voice list` 可见）：预置音色 → 音色库 → `E_NOT_FOUND`；`preset:<名>` 可直通未知预置名。
 
 ## 审计日志 ✅
 
@@ -88,7 +90,7 @@
 
 `tts usage`（🚧）由该文件聚合（请求数 / 字符数 / 缓存命中率 / 音频时长），为将来计费做准备。
 
-## 项目（= 作品）🚧（M1）
+## 项目（= 作品）✅
 
 ```
 <项目目录>/

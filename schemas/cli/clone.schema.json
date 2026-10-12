@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/clone.schema.json",
+  "title": "tts clone --json 成功输出",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "model",
+        "sample_file",
+        "sample_sha256",
+        "size_bytes"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "const": "clone" },
+        "model": { "type": "string", "minLength": 1 },
+        "sample_file": { "type": ["string", "null"] },
+        "sample_sha256": { "type": ["string", "null"] },
+        "size_bytes": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

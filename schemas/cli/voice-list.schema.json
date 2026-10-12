@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/voice-list.schema.json",
+  "title": "tts voice list --json 成功输出",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": ["library_dir", "total", "voices"],
+      "properties": {
+        "library_dir": { "type": "string", "minLength": 1 },
+        "total": { "type": "integer", "minimum": 0 },
+        "voices": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/voice" }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "voice": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "builtin",
+        "model",
+        "preset_name",
+        "design_prompt",
+        "source_voice",
+        "sample_file",
+        "sample_sha256",
+        "tags",
+        "notes",
+        "created_at",
+        "has_sample",
+        "language",
+        "gender"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["preset", "design", "clone"] },
+        "builtin": { "type": "boolean" },
+        "model": { "type": ["string", "null"] },
+        "preset_name": { "type": ["string", "null"] },
+        "design_prompt": { "type": ["string", "null"] },
+        "source_voice": { "type": ["string", "null"] },
+        "sample_file": { "type": ["string", "null"] },
+        "sample_sha256": { "type": ["string", "null"] },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "notes": { "type": "string" },
+        "created_at": { "type": ["string", "null"] },
+        "has_sample": { "type": "boolean" },
+        "language": { "type": ["string", "null"] },
+        "gender": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

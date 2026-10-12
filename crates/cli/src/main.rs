@@ -19,17 +19,19 @@ use tts_core::cache::{directory_size, Cache};
 use tts_core::config::{mask_secret, Config, ENV_API_KEY};
 use tts_core::doctor::{self, CheckStatus};
 use tts_core::error::{
-    success_envelope, Result, TtsError, E_DOCTOR_UNHEALTHY, E_IO, E_NOT_FOUND, E_PARTIAL, E_USAGE,
+    success_envelope, Result, TtsError, E_CONFIRM_REQUIRED, E_DOCTOR_UNHEALTHY, E_IO, E_NOT_FOUND,
+    E_PARTIAL, E_USAGE,
 };
 use tts_core::export::{self, ExportFormat, ExportOptions, Layout, DEFAULT_NAME_TEMPLATE};
+use tts_core::library::{self, Library, VoiceEntry, KIND_CLONE, KIND_DESIGN};
 use tts_core::mimo::MimoClient;
 use tts_core::paths::Paths;
 use tts_core::project::{Project, STATUS_FAILED, STATUS_OK, STATUS_PENDING, STATUS_REMOVED};
-use tts_core::provider::AudioFormat;
+use tts_core::provider::{AudioFormat, VoiceRef};
 use tts_core::script::ParseOptions;
 use tts_core::synth::{self, SynthOptions};
 use tts_core::usage;
-use tts_core::voices::parse_voice_ref;
+use tts_core::voices::PRESET_VOICES;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -83,6 +85,12 @@ enum Command {
     Gc(GcArgs),
     /// 导出：逐行音频 / 目录布局 / 整轨拼接 / 清单
     Export(ExportArgs),
+    /// 音色库（预置 + 设计 + 克隆）
+    Voice(VoiceArgs),
+    /// 文本设计音色（试听并可选保存）/ 固化
+    Design(DesignArgs),
+    /// 创建克隆音色（音频样本）
+    Clone(CloneArgs),
     /// 合成单条语音（缓存去重；可联动项目行写入 take）
     Synth(SynthArgs),
     /// 打印版本信息
@@ -373,6 +381,103 @@ struct ExportArgs {
 }
 
 #[derive(Args, Debug)]
+struct VoiceArgs {
+    #[command(subcommand)]
+    cmd: VoiceCmd,
+}
+
+#[derive(Subcommand, Debug)]
+enum VoiceCmd {
+    /// 列出音色（预置 + 音色库）
+    List {
+        /// 仅列出指定类型：preset | design | clone
+        #[arg(long)]
+        kind: Option<String>,
+    },
+    /// 查看单个音色详情
+    Show {
+        /// 音色 id 或名称
+        name: String,
+    },
+    /// 删除音色库条目（需 --yes；预置音色不可删除）
+    Rm {
+        /// 音色 id 或名称
+        name: String,
+    },
+}
+
+#[derive(Args, Debug)]
+struct DesignArgs {
+    #[command(subcommand)]
+    cmd: Option<DesignCmd>,
+    /// 音色描述（voicedesign 模型的 user 消息）
+    #[arg(long)]
+    prompt: Option<String>,
+    /// 试听文本
+    #[arg(long)]
+    text: Option<String>,
+    /// 保存到音色库（音色名）
+    #[arg(long)]
+    name: Option<String>,
+    /// 智能润色目标文本（voicedesign 专属）
+    #[arg(long)]
+    optimize_text_preview: bool,
+    /// 输出文件（默认 <工作区>/synth/<cache_key>.wav）
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// 跳过缓存
+    #[arg(long)]
+    no_cache: bool,
+    /// 模型 ID（默认取配置 models.design）
+    #[arg(long)]
+    model: Option<String>,
+    /// 标签（逗号分隔）
+    #[arg(long)]
+    tags: Option<String>,
+    /// 备注
+    #[arg(long)]
+    notes: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum DesignCmd {
+    /// 设计 → 克隆固化（保证跨句音色一致）
+    Solidify {
+        /// 来源：design 音色 id/名称，或音频文件路径（wav/mp3）
+        #[arg(long)]
+        from: String,
+        /// 新音色名
+        #[arg(long)]
+        name: String,
+        /// 标签（逗号分隔）
+        #[arg(long)]
+        tags: Option<String>,
+        /// 备注
+        #[arg(long)]
+        notes: Option<String>,
+    },
+}
+
+#[derive(Args, Debug)]
+struct CloneArgs {
+    /// 样本文件（wav / mp3，base64 后 ≤10MB）
+    #[arg(long)]
+    sample: PathBuf,
+    /// 音色名
+    #[arg(long)]
+    name: String,
+    /// 标签（逗号分隔）
+    #[arg(long)]
+    tags: Option<String>,
+    /// 备注
+    #[arg(long)]
+    notes: Option<String>,
+    /// 模型 ID（默认取配置 models.clone）
+    #[arg(long)]
+    model: Option<String>,
+}
+
+#[derive(Args, Debug)]
 struct SynthArgs {
     /// 待合成文本（使用 --line 时可省略，取行文本）
     #[arg(long)]
@@ -479,6 +584,9 @@ async fn execute(cli: &Cli) -> Result<CmdOutput> {
         Command::Usage(args) => cmd_usage(args),
         Command::Gc(args) => cmd_gc(args),
         Command::Export(args) => cmd_export(cli, args),
+        Command::Voice(args) => cmd_voice(cli, args),
+        Command::Design(args) => cmd_design(cli, args).await,
+        Command::Clone(args) => cmd_clone(args),
         Command::Synth(args) => cmd_synth(args).await,
         Command::Version => cmd_version(),
     }
@@ -762,11 +870,11 @@ async fn cmd_synth(args: &SynthArgs) -> Result<CmdOutput> {
         TtsError::usage(E_USAGE, "未指定音色")
             .with_hint("用 --voice <音色>，或先为角色绑定音色（tts role bind）")
     })?;
-    let voice = parse_voice_ref(&voice_spec)?;
+    let voice = library_of(&paths).resolve(&voice_spec)?;
     let model = args
         .model
         .clone()
-        .unwrap_or_else(|| config.models.tts.clone());
+        .unwrap_or_else(|| config.models.for_voice(&voice));
 
     let options = SynthOptions {
         model: model.clone(),
@@ -776,6 +884,7 @@ async fn cmd_synth(args: &SynthArgs) -> Result<CmdOutput> {
         format: AudioFormat::Wav,
         stream: args.stream,
         use_cache: !args.no_cache,
+        optimize_text_preview: false,
     };
 
     let client = MimoClient::from_config(&config)?;
@@ -884,6 +993,11 @@ fn cmd_role(args: &RoleArgs) -> Result<CmdOutput> {
                 return Err(TtsError::usage(E_USAGE, "角色名不能为空"));
             }
             let mut project = Project::open(project_dir)?;
+            // 绑定前先校验音色可解析（库内音色 / 预置音色 / 内联语法）
+            if let Some(spec) = voice.as_deref() {
+                let paths = Paths::resolve()?;
+                library_of(&paths).resolve(spec)?;
+            }
             project.bind_role(&role_name, voice.clone(), style.clone())?;
             let binding = project
                 .meta
@@ -1019,6 +1133,8 @@ async fn cmd_batch(cli: &Cli, args: &BatchArgs) -> Result<CmdOutput> {
         force: args.force,
         scene: args.scene.clone(),
         line_ids: args.line.clone(),
+        library_dir: Some(paths.library_voices_dir()),
+        models: args.model.is_none().then(|| config.models.clone()),
     };
     if options.concurrency == 0 {
         return Err(TtsError::usage(E_USAGE, "--concurrency 至少为 1"));
@@ -1375,14 +1491,15 @@ async fn cmd_cast(args: &CastArgs) -> Result<CmdOutput> {
 
     let client = MimoClient::from_config(&config)?;
     let cache = Cache::new(paths.cache_dir());
-    let model = args
-        .model
-        .clone()
-        .unwrap_or_else(|| config.models.tts.clone());
+    let model_override = args.model.clone();
 
+    let library = library_of(&paths);
     let mut results: Vec<Value> = Vec::new();
     for voice_spec in &voices {
-        let voice = parse_voice_ref(voice_spec)?;
+        let voice = library.resolve(voice_spec)?;
+        let model = model_override
+            .clone()
+            .unwrap_or_else(|| config.models.for_voice(&voice));
         let options = SynthOptions {
             model: model.clone(),
             text: text.clone(),
@@ -1391,6 +1508,7 @@ async fn cmd_cast(args: &CastArgs) -> Result<CmdOutput> {
             format: AudioFormat::Wav,
             stream: false,
             use_cache: !args.no_cache,
+            optimize_text_preview: false,
         };
         let outcome = synth::synthesize(&client, &cache, &options).await?;
         let (_, take_id) = project.append_take(
@@ -1622,6 +1740,468 @@ fn unique_export_dir(base: &Path) -> PathBuf {
         }
     }
     candidate
+}
+
+fn library_of(paths: &Paths) -> Library {
+    Library::new(paths.library_voices_dir())
+}
+
+fn parse_tags(raw: &Option<String>) -> Vec<String> {
+    raw.as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+fn voice_json_preset(preset: &tts_core::voices::PresetVoice) -> Value {
+    json!({
+        "id": preset.id,
+        "name": preset.name,
+        "kind": "preset",
+        "builtin": true,
+        "model": null,
+        "preset_name": preset.id,
+        "design_prompt": null,
+        "source_voice": null,
+        "sample_file": null,
+        "sample_sha256": null,
+        "tags": [],
+        "notes": "",
+        "created_at": null,
+        "has_sample": false,
+        "language": preset.language,
+        "gender": preset.gender,
+    })
+}
+
+fn voice_json_entry(entry: &VoiceEntry, has_sample: bool) -> Value {
+    json!({
+        "id": entry.id,
+        "name": entry.name,
+        "kind": entry.kind,
+        "builtin": false,
+        "model": entry.model,
+        "preset_name": entry.preset_name,
+        "design_prompt": entry.design_prompt,
+        "source_voice": entry.source_voice,
+        "sample_file": entry.sample_file,
+        "sample_sha256": entry.sample_sha256,
+        "tags": entry.tags,
+        "notes": entry.notes,
+        "created_at": entry.created_at,
+        "has_sample": has_sample,
+        "language": null,
+        "gender": null,
+    })
+}
+
+fn cmd_voice(cli: &Cli, args: &VoiceArgs) -> Result<CmdOutput> {
+    let paths = Paths::resolve()?;
+    paths.ensure_layout()?;
+    let library = library_of(&paths);
+
+    match &args.cmd {
+        VoiceCmd::List { kind } => {
+            let filter = kind.as_deref();
+            if let Some(filter) = filter {
+                if !matches!(filter, "preset" | "design" | "clone") {
+                    return Err(TtsError::usage(
+                        E_USAGE,
+                        format!("未知类型：{filter}（preset | design | clone）"),
+                    ));
+                }
+            }
+
+            let mut voices: Vec<Value> = Vec::new();
+            if filter.is_none() || filter == Some("preset") {
+                for preset in PRESET_VOICES {
+                    voices.push(voice_json_preset(preset));
+                }
+            }
+            for entry in library.list()? {
+                if let Some(filter) = filter {
+                    if entry.kind != filter {
+                        continue;
+                    }
+                }
+                let has_sample = entry
+                    .sample_file
+                    .as_ref()
+                    .map(|file| library.root().join(&entry.id).join(file).is_file())
+                    .unwrap_or(false);
+                voices.push(voice_json_entry(&entry, has_sample));
+            }
+
+            let data = json!({
+                "library_dir": library.root().display().to_string(),
+                "total": voices.len(),
+                "voices": voices,
+            });
+            let mut human = format!("共 {} 个音色：", voices.len());
+            for voice in &voices {
+                human.push_str(&format!(
+                    "\n  [{}] {} {}",
+                    voice["kind"].as_str().unwrap_or(""),
+                    voice["name"].as_str().unwrap_or(""),
+                    if voice["builtin"].as_bool().unwrap_or(false) {
+                        "（预置）".to_string()
+                    } else {
+                        voice["id"].as_str().unwrap_or("").to_string()
+                    }
+                ));
+            }
+            Ok(CmdOutput { data, human })
+        }
+        VoiceCmd::Show { name } => {
+            if let Some(record) = library.find(name)? {
+                let has_sample = record.sample_path().is_some();
+                let data = json!({
+                    "library_dir": library.root().display().to_string(),
+                    "voice": voice_json_entry(&record.entry, has_sample),
+                });
+                let human = format!(
+                    "{}（{}）kind={} model={}",
+                    record.entry.name, record.entry.id, record.entry.kind, record.entry.model
+                );
+                return Ok(CmdOutput { data, human });
+            }
+            let needle = name.trim();
+            if let Some(preset) = PRESET_VOICES
+                .iter()
+                .find(|preset| preset.id == needle || preset.name == needle)
+            {
+                let data = json!({
+                    "library_dir": library.root().display().to_string(),
+                    "voice": voice_json_preset(preset),
+                });
+                let human = format!(
+                    "{}（预置，{} / {}）",
+                    preset.name, preset.language, preset.gender
+                );
+                return Ok(CmdOutput { data, human });
+            }
+            Err(
+                TtsError::runtime(E_NOT_FOUND, format!("未找到音色：{name}"))
+                    .with_hint("用 `tts voice list` 查看可用音色"),
+            )
+        }
+        VoiceCmd::Rm { name } => {
+            let record = library.find(name)?.ok_or_else(|| {
+                TtsError::runtime(
+                    E_NOT_FOUND,
+                    format!("音色库中没有：{name}（预置音色不可删除）"),
+                )
+            })?;
+            if !cli.yes {
+                return Err(TtsError::confirm_required(
+                    E_CONFIRM_REQUIRED,
+                    format!(
+                        "将删除音色「{}」（{}）及其样本",
+                        record.entry.name, record.entry.id
+                    ),
+                )
+                .with_hint("确认请追加 --yes"));
+            }
+            let dir = record.dir.display().to_string();
+            let entry = library.remove(name)?;
+            let data = json!({
+                "id": entry.id,
+                "name": entry.name,
+                "kind": entry.kind,
+                "dir": dir,
+            });
+            let human = format!("已删除音色「{}」（{}）", entry.name, entry.id);
+            Ok(CmdOutput { data, human })
+        }
+    }
+}
+
+async fn cmd_design(cli: &Cli, args: &DesignArgs) -> Result<CmdOutput> {
+    if let Some(command) = &args.cmd {
+        return match command {
+            DesignCmd::Solidify {
+                from,
+                name,
+                tags,
+                notes,
+            } => cmd_solidify(from, name, tags, notes),
+        };
+    }
+    let _ = cli;
+
+    let paths = Paths::resolve()?;
+    let config = Config::load(&paths.config_file)?;
+    paths.ensure_layout()?;
+
+    let prompt = args
+        .prompt
+        .clone()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| TtsError::usage(E_USAGE, "缺少 --prompt（音色描述）"))?;
+    let text = args
+        .text
+        .clone()
+        .ok_or_else(|| TtsError::usage(E_USAGE, "缺少 --text（试听文本）"))?;
+    let model = args
+        .model
+        .clone()
+        .unwrap_or_else(|| config.models.design.clone());
+
+    let options = SynthOptions {
+        model: model.clone(),
+        text: text.clone(),
+        voice: VoiceRef::Design {
+            prompt: prompt.clone(),
+        },
+        instructions: None,
+        format: AudioFormat::Wav,
+        stream: false,
+        use_cache: !args.no_cache,
+        optimize_text_preview: args.optimize_text_preview,
+    };
+
+    let client = MimoClient::from_config(&config)?;
+    let cache = Cache::new(paths.cache_dir());
+    let outcome = match synth::synthesize(&client, &cache, &options).await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let mut record = AuditRecord::ok("design", &model).into_failed(error.code());
+            record.chars = text.chars().count();
+            record.voice = Some(prompt.chars().take(40).collect());
+            let _ = audit::append(&paths.audit_file(), &record);
+            return Err(error);
+        }
+    };
+
+    let output = match &args.out {
+        Some(path) => path.clone(),
+        None => paths
+            .root
+            .join("synth")
+            .join(format!("{}.wav", outcome.cache_key)),
+    };
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            TtsError::runtime(E_IO, format!("无法创建目录 {}：{e}", parent.display()))
+        })?;
+    }
+    fs::write(&output, &outcome.audio)
+        .map_err(|e| TtsError::runtime(E_IO, format!("写入音频失败 {}：{e}", output.display())))?;
+
+    let library = library_of(&paths);
+    let saved = match args
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        Some(name) => {
+            if library.find(name)?.is_some() {
+                return Err(
+                    TtsError::usage(E_USAGE, format!("音色库已存在同名音色：{name}"))
+                        .with_hint("换个 --name，或先 `tts voice rm <音色>`"),
+                );
+            }
+            let entry = VoiceEntry {
+                id: library::make_voice_id(name, KIND_DESIGN, &prompt),
+                name: name.to_string(),
+                kind: KIND_DESIGN.to_string(),
+                model: model.clone(),
+                design_prompt: Some(prompt.clone()),
+                tags: parse_tags(&args.tags),
+                notes: args.notes.clone().unwrap_or_default(),
+                ..VoiceEntry::default()
+            };
+            let record = library.create(entry, Some(&output))?;
+            Some(json!({
+                "id": record.entry.id,
+                "name": record.entry.name,
+                "sample_file": record.entry.sample_file,
+            }))
+        }
+        None => None,
+    };
+
+    let mut record = AuditRecord::ok("design", &outcome.model);
+    record.voice = saved
+        .as_ref()
+        .and_then(|voice| voice["id"].as_str().map(str::to_string));
+    record.chars = outcome.chars;
+    record.duration_ms = outcome.duration_ms;
+    record.latency_ms = outcome.latency_ms;
+    record.cached = outcome.cached;
+    record.cost_note = Some("tts:free".to_string());
+    audit::append(&paths.audit_file(), &record)?;
+
+    let data = json!({
+        "output": output.display().to_string(),
+        "model": outcome.model,
+        "chars": outcome.chars,
+        "duration_ms": outcome.duration_ms,
+        "latency_ms": outcome.latency_ms,
+        "cached": outcome.cached,
+        "cache_key": outcome.cache_key,
+        "optimize_text_preview": args.optimize_text_preview,
+        "voice": saved,
+        "prompt": prompt,
+    });
+    let human = format!(
+        "已生成设计音色试听：{}（{}）",
+        output.display(),
+        if saved.is_some() {
+            "已保存到音色库"
+        } else {
+            "未保存（加 --name 可入库）"
+        }
+    );
+    Ok(CmdOutput { data, human })
+}
+
+fn cmd_solidify(
+    from: &str,
+    name: &str,
+    tags: &Option<String>,
+    notes: &Option<String>,
+) -> Result<CmdOutput> {
+    let paths = Paths::resolve()?;
+    let config = Config::load(&paths.config_file)?;
+    paths.ensure_layout()?;
+    let library = library_of(&paths);
+
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(TtsError::usage(E_USAGE, "音色名不能为空"));
+    }
+    if library.find(name)?.is_some() {
+        return Err(
+            TtsError::usage(E_USAGE, format!("音色库已存在同名音色：{name}"))
+                .with_hint("换个 --name，或先 `tts voice rm <音色>`"),
+        );
+    }
+
+    let (sample_path, source_voice) = match library.find(from)? {
+        Some(record) => {
+            if record.entry.kind != KIND_DESIGN {
+                return Err(TtsError::usage(
+                    E_USAGE,
+                    format!(
+                        "「{}」不是 design 音色（kind={}）",
+                        record.entry.name, record.entry.kind
+                    ),
+                )
+                .with_hint("固化的来源应为 design 音色，或直接把音频文件路径传给 --from"));
+            }
+            let sample = record.sample_path().ok_or_else(|| {
+                TtsError::runtime(
+                    E_NOT_FOUND,
+                    format!("design 音色「{}」没有留档样本", record.entry.name),
+                )
+                .with_hint("设计生成时加 --name 保存，或改用音频文件路径作为 --from")
+            })?;
+            (sample, Some(record.entry.id.clone()))
+        }
+        None => {
+            let path = PathBuf::from(from);
+            if !path.is_file() {
+                return Err(TtsError::runtime(
+                    E_NOT_FOUND,
+                    format!("未找到音色或音频文件：{from}"),
+                ));
+            }
+            (path, None)
+        }
+    };
+
+    let size = library::validate_sample(&sample_path)?;
+    let entry = VoiceEntry {
+        id: library::make_voice_id(name, KIND_CLONE, &sample_path.display().to_string()),
+        name: name.to_string(),
+        kind: KIND_CLONE.to_string(),
+        model: config.models.clone.clone(),
+        source_voice: source_voice.clone(),
+        tags: parse_tags(tags),
+        notes: notes.clone().unwrap_or_default(),
+        ..VoiceEntry::default()
+    };
+    let record = library.create(entry, Some(&sample_path))?;
+
+    let mut audit_record = AuditRecord::ok("solidify", &record.entry.model);
+    audit_record.voice = Some(record.entry.id.clone());
+    audit_record.chars = 0;
+    audit_record.cost_note = Some("local".to_string());
+    audit::append(&paths.audit_file(), &audit_record)?;
+
+    let data = json!({
+        "id": record.entry.id,
+        "name": record.entry.name,
+        "kind": record.entry.kind,
+        "model": record.entry.model,
+        "sample_file": record.entry.sample_file,
+        "sample_sha256": record.entry.sample_sha256,
+        "size_bytes": size,
+        "source_voice": source_voice,
+    });
+    let human = format!(
+        "已固化克隆音色「{}」（{}）——后续用它可保证跨句一致",
+        record.entry.name, record.entry.id
+    );
+    Ok(CmdOutput { data, human })
+}
+
+fn cmd_clone(args: &CloneArgs) -> Result<CmdOutput> {
+    let paths = Paths::resolve()?;
+    let config = Config::load(&paths.config_file)?;
+    paths.ensure_layout()?;
+    let library = library_of(&paths);
+
+    let name = args.name.trim();
+    if name.is_empty() {
+        return Err(TtsError::usage(E_USAGE, "音色名不能为空"));
+    }
+    if library.find(name)?.is_some() {
+        return Err(
+            TtsError::usage(E_USAGE, format!("音色库已存在同名音色：{name}"))
+                .with_hint("换个 --name，或先 `tts voice rm <音色>`"),
+        );
+    }
+    let size = library::validate_sample(&args.sample)?;
+
+    let entry = VoiceEntry {
+        id: library::make_voice_id(name, KIND_CLONE, &args.sample.display().to_string()),
+        name: name.to_string(),
+        kind: KIND_CLONE.to_string(),
+        model: args
+            .model
+            .clone()
+            .unwrap_or_else(|| config.models.clone.clone()),
+        tags: parse_tags(&args.tags),
+        notes: args.notes.clone().unwrap_or_default(),
+        ..VoiceEntry::default()
+    };
+    let record = library.create(entry, Some(&args.sample))?;
+
+    let mut audit_record = AuditRecord::ok("clone", &record.entry.model);
+    audit_record.voice = Some(record.entry.id.clone());
+    audit_record.cost_note = Some("local".to_string());
+    audit::append(&paths.audit_file(), &audit_record)?;
+
+    let data = json!({
+        "id": record.entry.id,
+        "name": record.entry.name,
+        "kind": record.entry.kind,
+        "model": record.entry.model,
+        "sample_file": record.entry.sample_file,
+        "sample_sha256": record.entry.sample_sha256,
+        "size_bytes": size,
+    });
+    let human = format!(
+        "已创建克隆音色「{}」（{}）",
+        record.entry.name, record.entry.id
+    );
+    Ok(CmdOutput { data, human })
 }
 
 fn is_secret_key(key: &str) -> bool {

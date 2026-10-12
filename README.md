@@ -65,12 +65,18 @@ tts gc --dry-run --json
 # 导出（M1）
 tts export --project ./works/rainy-station --format mp3 --layout role --concat --json
 
-# 单条合成（幂等缓存 + 审计；--line 联动项目 take）
+# 音色库：设计 → 固化 → 克隆（M2）
+tts design --prompt "年轻清亮女声" --text "试听文本" --name "雨夜女主"
+tts design solidify --from "雨夜女主" --name "雨夜女主-固化"
+tts clone --sample ./voices/yuki.mp3 --name Yuki
+tts voice list --json
+
+# 单条合成（幂等缓存 + 审计；--line 联动项目 take；模型按音色类型自动选择）
 tts synth --text "早上好！" --voice 冰糖 --json
-tts synth --project ./works/rainy-station --line L3f2a9c01 --voice 冰糖 --style "(低沉)"
+tts synth --project ./works/rainy-station --line L3f2a9c01 --voice "雨夜女主-固化"
 ```
 
-M1 已全部可用；下一步 M2：`voice` · `design` · `clone`（音色库与设计→克隆固化）。
+M1 + M2 已全部可用；下一步 M3：Tauri + React + animal-island-ui 桌面 GUI。
 
 ## 仓库结构
 
@@ -107,7 +113,7 @@ tools/lint     # fmt + clippy(-D warnings) + 前端 lint
 | --- | --- | --- |
 | M0 | 骨架 + 契约（doctor / config / schema / 文档 / 工具链） | ✅ 完成 |
 | M1 | CLI 端到端：合成 / 项目 / 对白解析 / 批量队列 / Take / 导出 / 用量 | ✅ 完成 |
-| M2 | 音色库：音色设计、克隆、设计→克隆固化、Cast 对比增强 | 计划 |
+| M2 | 音色库：音色设计、克隆、设计→克隆固化、库内音色全流程可用 | ✅ 完成 |
 | M3 | GUI：Tauri 2 + React + animal-island-ui（试听 / 对比 / 批量监控） | 计划 |
 | M4 | 候选：ASR 校验、MCP Server、打包分发、多 Provider | 候选 |
 

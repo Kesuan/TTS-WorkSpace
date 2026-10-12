@@ -37,6 +37,10 @@ pub struct BatchOptions {
     pub force: bool,
     pub scene: Option<String>,
     pub line_ids: Vec<String>,
+    /// 全局音色库目录（用于解析库内音色；`None` 时仅识别内联语法与预置音色）。
+    pub library_dir: Option<std::path::PathBuf>,
+    /// 模型配置（`Some` 时按音色类型自动选择模型，优先级高于 `model`）。
+    pub models: Option<crate::config::ModelsConfig>,
 }
 
 /// 批量事件（JSONL 输出；`event` 字段为类型标签）。
@@ -116,6 +120,8 @@ struct Target {
     voice: VoiceRef,
     voice_spec: String,
     style: Option<String>,
+    /// 该行的实际使用模型（按音色类型自动选择，除非显式指定了 model）。
+    model: String,
 }
 
 #[derive(Debug, Default)]
@@ -131,6 +137,10 @@ pub fn select_targets(
     lines: &LinesFile,
     options: &BatchOptions,
 ) -> Result<Selection> {
+    let library = options
+        .library_dir
+        .as_ref()
+        .map(crate::library::Library::new);
     let explicit: Option<HashMap<&str, ()>> = if options.line_ids.is_empty() {
         None
     } else {
@@ -196,10 +206,17 @@ pub fn select_targets(
         let voice = match voice_cache.get(&voice_spec) {
             Some(voice) => voice.clone(),
             None => {
-                let parsed = parse_voice_ref(&voice_spec)?;
+                let parsed = match &library {
+                    Some(library) => library.resolve(&voice_spec)?,
+                    None => parse_voice_ref(&voice_spec)?,
+                };
                 voice_cache.insert(voice_spec.clone(), parsed.clone());
                 parsed
             }
+        };
+        let model = match &options.models {
+            Some(models) => models.for_voice(&voice),
+            None => options.model.clone(),
         };
         selection.targets.push(Target {
             id: line.id.clone(),
@@ -208,6 +225,7 @@ pub fn select_targets(
             voice,
             voice_spec,
             style: project.resolve_style(line),
+            model,
         });
     }
 
@@ -302,13 +320,14 @@ pub async fn run(
             loop {
                 attempts += 1;
                 let synth_options = SynthOptions {
-                    model: options.model.clone(),
+                    model: target.model.clone(),
                     text: target.text.clone(),
                     voice: target.voice.clone(),
                     instructions: target.style.clone(),
                     format: AudioFormat::Wav,
                     stream: false,
                     use_cache: options.use_cache,
+                    optimize_text_preview: false,
                 };
                 match synth::synthesize(provider.as_ref(), &cache, &synth_options).await {
                     Ok(outcome) => {
@@ -369,7 +388,7 @@ pub async fn run(
                 }
                 succeeded += 1;
 
-                let mut record = AuditRecord::ok("batch", &options.model);
+                let mut record = AuditRecord::ok("batch", &task.target.model);
                 record.project = Some(project.root.display().to_string());
                 record.line_id = Some(line_id.clone());
                 record.voice = Some(voice_spec.clone());
@@ -399,7 +418,8 @@ pub async fn run(
                 }
                 failed += 1;
 
-                let mut record = AuditRecord::ok("batch", &options.model).into_failed(error.code());
+                let mut record =
+                    AuditRecord::ok("batch", &task.target.model).into_failed(error.code());
                 record.project = Some(project.root.display().to_string());
                 record.line_id = Some(line_id.clone());
                 record.voice = Some(voice_spec.clone());
@@ -507,6 +527,8 @@ mod tests {
             force: false,
             scene: None,
             line_ids: Vec::new(),
+            library_dir: None,
+            models: None,
         }
     }
 
