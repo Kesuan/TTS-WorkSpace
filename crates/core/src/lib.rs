@@ -10,7 +10,9 @@ pub mod doctor;
 pub mod error;
 pub mod mimo;
 pub mod paths;
+pub mod project;
 pub mod provider;
+pub mod script;
 
 /// 内核版本（与 workspace 版本一致）。
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

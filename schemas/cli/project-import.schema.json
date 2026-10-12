@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/project-import.schema.json",
+  "title": "tts project import --json 成功输出（解析报告）",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": ["script", "counts", "roles", "unbound_roles", "warnings", "diff"],
+      "properties": {
+        "script": { "type": "string", "minLength": 1 },
+        "counts": {
+          "type": "object",
+          "required": ["lines", "roles", "chapters", "scenes", "narrator_lines"],
+          "properties": {
+            "lines": { "type": "integer", "minimum": 0 },
+            "roles": { "type": "integer", "minimum": 0 },
+            "chapters": { "type": "integer", "minimum": 0 },
+            "scenes": { "type": "integer", "minimum": 0 },
+            "narrator_lines": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "roles": { "type": "array", "items": { "type": "string" } },
+        "unbound_roles": { "type": "array", "items": { "type": "string" } },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["line", "code", "message"],
+            "properties": {
+              "line": { "type": "integer", "minimum": 1 },
+              "code": { "type": "string", "pattern": "^W_[A-Z0-9_]+$" },
+              "message": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "diff": {
+          "type": "object",
+          "required": ["added", "removed", "changed", "unchanged"],
+          "properties": {
+            "added": { "type": "integer", "minimum": 0 },
+            "removed": { "type": "integer", "minimum": 0 },
+            "changed": { "type": "integer", "minimum": 0 },
+            "unchanged": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/project-status.schema.json",
+  "title": "tts project status --json 成功输出",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": ["root", "name", "scripts", "lines_path", "counts", "roles"],
+      "properties": {
+        "root": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "scripts": { "type": "array", "items": { "type": "string" } },
+        "lines_path": { "type": "string", "minLength": 1 },
+        "counts": {
+          "type": "object",
+          "required": ["total", "pending", "ok", "failed", "removed"],
+          "properties": {
+            "total": { "type": "integer", "minimum": 0 },
+            "pending": { "type": "integer", "minimum": 0 },
+            "ok": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 },
+            "removed": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "bound", "voice", "style"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "bound": { "type": "boolean" },
+              "voice": { "type": ["string", "null"] },
+              "style": { "type": ["string", "null"] }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

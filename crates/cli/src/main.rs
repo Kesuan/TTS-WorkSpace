@@ -5,6 +5,8 @@
 //! - 非 `--json`：成功输出到 stdout（人类可读），失败输出到 stderr；
 //! - 退出码：0 成功 / 1 运行时失败 / 2 用法与校验错误 / 3 部分失败 / 4 需要确认。
 
+use std::path::PathBuf;
+
 use clap::{Args, Parser, Subcommand};
 use serde_json::{json, Value};
 
@@ -12,6 +14,8 @@ use tts_core::config::{mask_secret, Config, ENV_API_KEY};
 use tts_core::doctor::{self, CheckStatus};
 use tts_core::error::{success_envelope, Result, TtsError, E_DOCTOR_UNHEALTHY, E_USAGE};
 use tts_core::paths::Paths;
+use tts_core::project::{Project, STATUS_FAILED, STATUS_OK, STATUS_PENDING, STATUS_REMOVED};
+use tts_core::script::ParseOptions;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -48,6 +52,8 @@ enum Command {
     Doctor(DoctorArgs),
     /// 读取与修改配置
     Config(ConfigArgs),
+    /// 项目（= 作品）管理：初始化 / 导入对白 / 状态
+    Project(ProjectArgs),
     /// 打印版本信息
     Version,
 }
@@ -87,6 +93,44 @@ enum ConfigCmd {
         key: String,
         /// 配置项值
         value: String,
+    },
+}
+
+#[derive(Args, Debug)]
+struct ProjectArgs {
+    #[command(subcommand)]
+    cmd: ProjectCmd,
+}
+
+#[derive(Subcommand, Debug)]
+enum ProjectCmd {
+    /// 初始化项目（= 作品；目录不存在则创建）
+    Init {
+        /// 项目目录
+        path: PathBuf,
+        /// 作品名（默认取目录名）
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// 解析对白脚本并写入 lines.json（输出解析报告与 diff）
+    Import {
+        /// 脚本文件路径
+        script: PathBuf,
+        /// 项目目录
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+        /// 关闭“无角色前缀段落归入旁白”（这类段落将被忽略并告警）
+        #[arg(long)]
+        no_narrator_fallback: bool,
+        /// 续行之间插入空格（英文文稿适用）
+        #[arg(long)]
+        join_with_space: bool,
+    },
+    /// 项目状态概览（条目状态分布 / 角色绑定 / 脚本清单）
+    Status {
+        /// 项目目录
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
     },
 }
 
@@ -151,6 +195,7 @@ async fn execute(cli: &Cli) -> Result<CmdOutput> {
     match &cli.command {
         Command::Doctor(args) => cmd_doctor(args).await,
         Command::Config(args) => cmd_config(args),
+        Command::Project(args) => cmd_project(args),
         Command::Version => cmd_version(),
     }
 }
@@ -272,6 +317,114 @@ fn cmd_config(args: &ConfigArgs) -> Result<CmdOutput> {
                 "config_path": paths.config_file.display().to_string(),
             });
             let human = format!("已写入 {}：{key} = {}", paths.config_file.display(), shown);
+            Ok(CmdOutput { data, human })
+        }
+    }
+}
+
+fn cmd_project(args: &ProjectArgs) -> Result<CmdOutput> {
+    match &args.cmd {
+        ProjectCmd::Init { path, name } => {
+            let project = Project::create(path, name.as_deref().unwrap_or(""))?;
+            let data = json!({
+                "root": project.root.display().to_string(),
+                "name": project.meta.name,
+                "project_file": project.meta_path().display().to_string(),
+                "lines_file": project.lines_path().display().to_string(),
+            });
+            let human = format!(
+                "已初始化项目「{}」：{}",
+                project.meta.name,
+                project.root.display()
+            );
+            Ok(CmdOutput { data, human })
+        }
+        ProjectCmd::Import {
+            script,
+            project: project_dir,
+            no_narrator_fallback,
+            join_with_space,
+        } => {
+            let mut project = Project::open(project_dir)?;
+            let options = ParseOptions {
+                narrator_fallback: !no_narrator_fallback,
+                join_with_space: *join_with_space,
+            };
+            let outcome = project.import_script(script, &options)?;
+            let data = serde_json::to_value(&outcome)?;
+            let diff = outcome.diff;
+            let unbound = if outcome.unbound_roles.is_empty() {
+                "（无）".to_string()
+            } else {
+                outcome.unbound_roles.join("、")
+            };
+            let human = format!(
+                "已导入 {}：条目 {}（新增 {} / 修改 {} / 删除 {} / 未变 {}）\n角色：{}\n未绑定音色：{}",
+                outcome.script,
+                outcome.counts.lines,
+                diff.added,
+                diff.changed,
+                diff.removed,
+                diff.unchanged,
+                outcome.roles.join("、"),
+                unbound,
+            );
+            Ok(CmdOutput { data, human })
+        }
+        ProjectCmd::Status {
+            project: project_dir,
+        } => {
+            let project = Project::open(project_dir)?;
+            let lines = project.load_lines()?;
+            let count = |status: &str| {
+                lines
+                    .lines
+                    .iter()
+                    .filter(|line| line.status == status)
+                    .count()
+            };
+            let counts = json!({
+                "total": lines.lines.len(),
+                "pending": count(STATUS_PENDING),
+                "ok": count(STATUS_OK),
+                "failed": count(STATUS_FAILED),
+                "removed": count(STATUS_REMOVED),
+            });
+            let mut roles: Vec<Value> = Vec::new();
+            for line in &lines.lines {
+                if line.status == STATUS_REMOVED {
+                    continue;
+                }
+                let name = Value::String(line.role.clone());
+                if roles.iter().any(|role| role["name"] == name) {
+                    continue;
+                }
+                let binding = project.meta.roles.get(&line.role);
+                roles.push(json!({
+                    "name": line.role,
+                    "bound": binding.map(|b| b.voice.is_some()).unwrap_or(false),
+                    "voice": binding.and_then(|b| b.voice.clone()),
+                    "style": binding.and_then(|b| b.style.clone()),
+                }));
+            }
+            let data = json!({
+                "root": project.root.display().to_string(),
+                "name": project.meta.name,
+                "scripts": project.meta.scripts,
+                "lines_path": project.lines_path().display().to_string(),
+                "counts": counts,
+                "roles": roles,
+            });
+            let human = format!(
+                "项目「{}」：条目 {}（pending {} / ok {} / failed {} / removed {}），角色 {} 个",
+                project.meta.name,
+                data["counts"]["total"],
+                data["counts"]["pending"],
+                data["counts"]["ok"],
+                data["counts"]["failed"],
+                data["counts"]["removed"],
+                roles.len(),
+            );
             Ok(CmdOutput { data, human })
         }
     }

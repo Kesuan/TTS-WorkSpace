@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/project-init.schema.json",
+  "title": "tts project init --json 成功输出",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": ["root", "name", "project_file", "lines_file"],
+      "properties": {
+        "root": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "project_file": { "type": "string", "minLength": 1 },
+        "lines_file": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

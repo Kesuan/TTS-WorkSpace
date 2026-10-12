@@ -60,8 +60,8 @@
 | `E_CACHE_IO` | 1 | 缓存读写失败 | ✅ |
 | `E_FFMPEG_MISSING` | 1 | 需要 ffmpeg 但未找到 | 🚧 |
 | `E_FFMPEG_FAILED` | 1 | ffmpeg 执行失败 | 🚧 |
-| `E_NOT_FOUND` | 1 | 目标不存在（项目 / 行 / take / 音色） | 🚧 |
-| `E_PARSE_SCRIPT` | 1 | 对白脚本解析失败 | 🚧 |
+| `E_NOT_FOUND` | 1 | 目标不存在（项目 / 行 / take / 音色 / 脚本） | ✅ |
+| `E_PARSE_SCRIPT` | 1 | 对白脚本解析失败（details 带 file/line/col） | ✅ |
 | `E_CAPABILITY` | 2 | 模型不支持该能力（如对设计模型使用 `--stream`） | ✅ |
 | `E_CONFIRM_REQUIRED` | 4 | 危险操作需要 `--yes` | 🚧 |
 | `E_DOCTOR_UNHEALTHY` | 1 | `doctor` 存在失败项（明细在 `details`） | ✅ |
@@ -159,6 +159,31 @@
 
 - Schema：[`config-list`](../schemas/cli/config-list.schema.json) · [`config-get`](../schemas/cli/config-get.schema.json) · [`config-set`](../schemas/cli/config-set.schema.json)
 
+### `tts project`
+
+项目（= 作品）管理：`init` / `import` / `status`。
+
+- `tts project init <路径> [--name <作品名>]`：创建项目目录结构（`project.json` / `script/` / `takes/` / `exports/` / `lines.json`）。目录已存在项目时报 `E_USAGE`（退出码 2）。Schema：[`project-init`](../schemas/cli/project-init.schema.json)
+- `tts project import <脚本> [--project <目录>] [--no-narrator-fallback] [--join-with-space]`：解析对白脚本（格式见 [docs/script-format.md](script-format.md)），写入 `lines.json`，输出解析报告与 diff。Schema：[`project-import`](../schemas/cli/project-import.schema.json)
+
+```json
+{
+  "ok": true,
+  "data": {
+    "script": "script/chapter1.txt",
+    "counts": { "lines": 42, "roles": 3, "chapters": 1, "scenes": 2, "narrator_lines": 5 },
+    "roles": ["阿岚", "小满", "旁白"],
+    "unbound_roles": ["小满"],
+    "warnings": [{ "line": 7, "code": "W_ORPHAN_CONTINUATION", "message": "缩进行没有可续接的台词，已忽略" }],
+    "diff": { "added": 42, "removed": 0, "changed": 0, "unchanged": 0 }
+  }
+}
+```
+
+`--project` 默认当前目录；脚本路径不存在 → `E_NOT_FOUND`；角色名超长等格式错误 → `E_PARSE_SCRIPT`（`details.file/line/col`）。
+
+- `tts project status [--project <目录>]`：条目状态分布与角色绑定概览。Schema：[`project-status`](../schemas/cli/project-status.schema.json)
+
 ---
 
 ## 计划中命令（🚧 M1 / M2）
@@ -172,9 +197,9 @@
 | `tts design --prompt … --text … [--optimize-text-preview]` | 文本设计音色并试听 |
 | `tts design solidify --take <id> --name <名>` | 设计 → 克隆固化（保证跨句一致） |
 | `tts clone --sample <文件> --name <名>` | 创建克隆音色（≤10MB、wav/mp3、base64 data URL） |
-| `tts project init\|import\|status\|rm` | 项目（= 作品）管理；`import` 解析对白脚本并输出报告 |
 | `tts role bind --role <名> --voice <ref> [--style …]` | 角色 ↔ 音色绑定 |
 | `tts line set --line <id> [--style …] [--voice <ref>]` | 行级覆盖（写入 lines.json） |
+| `tts project rm` | 删除项目（需 `--yes`） |
 | `tts batch --all\|--scene <名> [--concurrency N] [--events jsonl]` | 批量生成（幂等；断点续跑；缓存去重） |
 | `tts batch status\|retry` | 批量状态 / 重试失败项 |
 | `tts takes list\|select --line <id>` | Take 列表与选用 |
