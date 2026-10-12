@@ -2192,6 +2192,7 @@ dependencies = [
  "base64",
  "clap",
  "jsonschema",
+ "libc",
  "serde_json",
  "tempfile",
  "tokio",

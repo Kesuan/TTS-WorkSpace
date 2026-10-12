@@ -409,6 +409,12 @@ struct CmdOutput {
 }
 
 fn main() {
+    #[cfg(unix)]
+    unsafe {
+        // 管道被下游提前关闭时按 Unix 惯例终止（而非 println! panic）
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     let raw_args: Vec<String> = std::env::args().collect();
     let wants_json = raw_args.iter().any(|arg| arg == "--json");
 
