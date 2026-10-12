@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/export.schema.json",
+  "title": "tts export --json 成功输出",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": [
+        "project",
+        "out_dir",
+        "format",
+        "layout",
+        "manifest",
+        "concat",
+        "ffmpeg_used",
+        "count",
+        "items"
+      ],
+      "properties": {
+        "project": { "type": "string", "minLength": 1 },
+        "out_dir": { "type": "string", "minLength": 1 },
+        "format": { "enum": ["wav", "mp3"] },
+        "layout": { "enum": ["flat", "role", "scene"] },
+        "manifest": { "type": "string", "minLength": 1 },
+        "concat": { "type": ["string", "null"] },
+        "ffmpeg_used": { "type": "boolean" },
+        "count": { "type": "integer", "minimum": 0 },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "line_id",
+              "role",
+              "scene",
+              "chapter",
+              "index",
+              "take_id",
+              "file",
+              "duration_ms",
+              "chars"
+            ],
+            "properties": {
+              "line_id": { "type": "string", "minLength": 1 },
+              "role": { "type": "string", "minLength": 1 },
+              "scene": { "type": ["string", "null"] },
+              "chapter": { "type": ["string", "null"] },
+              "index": { "type": "integer", "minimum": 0 },
+              "take_id": { "type": "string", "minLength": 1 },
+              "file": { "type": "string", "minLength": 1 },
+              "duration_ms": { "type": "integer", "minimum": 0 },
+              "chars": { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

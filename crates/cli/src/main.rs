@@ -21,6 +21,7 @@ use tts_core::doctor::{self, CheckStatus};
 use tts_core::error::{
     success_envelope, Result, TtsError, E_DOCTOR_UNHEALTHY, E_IO, E_NOT_FOUND, E_PARTIAL, E_USAGE,
 };
+use tts_core::export::{self, ExportFormat, ExportOptions, Layout, DEFAULT_NAME_TEMPLATE};
 use tts_core::mimo::MimoClient;
 use tts_core::paths::Paths;
 use tts_core::project::{Project, STATUS_FAILED, STATUS_OK, STATUS_PENDING, STATUS_REMOVED};
@@ -42,9 +43,8 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
-    /// 危险操作确认（非交互环境必需；v0.1 危险命令见 docs/cli.md）
+    /// 危险操作确认（非交互环境必需；覆盖导出目录时使用）
     #[arg(long, global = true)]
-    #[allow(dead_code)] // M1 删除类命令启用
     yes: bool,
 
     /// 静默模式（成功时不输出人类可读内容）
@@ -81,6 +81,8 @@ enum Command {
     Usage(UsageArgs),
     /// 清理未被引用的缓存
     Gc(GcArgs),
+    /// 导出：逐行音频 / 目录布局 / 整轨拼接 / 清单
+    Export(ExportArgs),
     /// 合成单条语音（缓存去重；可联动项目行写入 take）
     Synth(SynthArgs),
     /// 打印版本信息
@@ -337,6 +339,40 @@ struct GcArgs {
 }
 
 #[derive(Args, Debug)]
+struct ExportArgs {
+    /// 项目目录
+    #[arg(long, default_value = ".")]
+    project: PathBuf,
+    /// 输出目录（默认 <项目>/exports/<时间戳>；目录非空时需 --yes）
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// 输出格式：wav | mp3
+    #[arg(long, default_value = "wav")]
+    format: String,
+    /// 目录布局：flat | role | scene
+    #[arg(long, default_value = "flat")]
+    layout: String,
+    /// 文件名模板（占位符：{seq} {role} {line} {take} {scene} {chapter}）
+    #[arg(long)]
+    name: Option<String>,
+    /// 生成整轨拼接文件 full.<ext>
+    #[arg(long)]
+    concat: bool,
+    /// 响度归一化（ffmpeg loudnorm，-16 LUFS）
+    #[arg(long)]
+    normalize: bool,
+    /// 裁剪首尾静音（ffmpeg silenceremove）
+    #[arg(long)]
+    trim_silence: bool,
+    /// 仅导出指定行（可重复）
+    #[arg(long = "line")]
+    line: Vec<String>,
+    /// 仅导出指定场景
+    #[arg(long)]
+    scene: Option<String>,
+}
+
+#[derive(Args, Debug)]
 struct SynthArgs {
     /// 待合成文本（使用 --line 时可省略，取行文本）
     #[arg(long)]
@@ -436,6 +472,7 @@ async fn execute(cli: &Cli) -> Result<CmdOutput> {
         Command::Cast(args) => cmd_cast(args).await,
         Command::Usage(args) => cmd_usage(args),
         Command::Gc(args) => cmd_gc(args),
+        Command::Export(args) => cmd_export(cli, args),
         Command::Synth(args) => cmd_synth(args).await,
         Command::Version => cmd_version(),
     }
@@ -1493,6 +1530,92 @@ fn cmd_gc(args: &GcArgs) -> Result<CmdOutput> {
         )
     };
     Ok(CmdOutput { data, human })
+}
+
+fn cmd_export(cli: &Cli, args: &ExportArgs) -> Result<CmdOutput> {
+    let paths = Paths::resolve()?;
+    let config = Config::load(&paths.config_file)?;
+
+    let project = Project::open(&args.project)?;
+    let format = ExportFormat::parse(&args.format)?;
+    let layout = Layout::parse(&args.layout)?;
+    let ffmpeg = doctor::resolve_ffmpeg(&config);
+
+    let out_dir = match &args.out {
+        Some(dir) => dir.clone(),
+        None => unique_export_dir(&project.exports_dir()),
+    };
+
+    let options = ExportOptions {
+        out_dir: out_dir.clone(),
+        format,
+        layout,
+        name_template: args
+            .name
+            .clone()
+            .unwrap_or_else(|| DEFAULT_NAME_TEMPLATE.to_string()),
+        concat: args.concat,
+        normalize: args.normalize,
+        trim_silence: args.trim_silence,
+        overwrite: cli.yes,
+        line_ids: args.line.clone(),
+        scene: args.scene.clone(),
+        ffmpeg,
+    };
+
+    let outcome = export::run(&project, &options)?;
+
+    let mut record = AuditRecord::ok("export", "export");
+    record.project = Some(project.root.display().to_string());
+    record.chars = outcome.items.iter().map(|item| item.chars).sum();
+    record.duration_ms = outcome.items.iter().map(|item| item.duration_ms).sum();
+    record.cost_note = Some("export:local".to_string());
+    audit::append(&paths.audit_file(), &record)?;
+
+    let data = json!({
+        "project": project.root.display().to_string(),
+        "out_dir": outcome.out_dir.display().to_string(),
+        "format": outcome.format,
+        "layout": outcome.layout,
+        "manifest": outcome.manifest.display().to_string(),
+        "concat": outcome.concat.as_ref().map(|path| path.display().to_string()),
+        "ffmpeg_used": outcome.ffmpeg_used,
+        "count": outcome.items.len(),
+        "items": outcome.items,
+    });
+    let human = format!(
+        "已导出 {} 行 → {}（{} / {}）",
+        data["count"],
+        outcome.out_dir.display(),
+        outcome.format,
+        outcome.layout
+    );
+    Ok(CmdOutput { data, human })
+}
+
+fn export_timestamp() -> String {
+    let raw = tts_core::util::now_rfc3339();
+    let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() >= 14 {
+        format!("{}-{}", &digits[..8], &digits[8..14])
+    } else {
+        digits
+    }
+}
+
+fn unique_export_dir(base: &Path) -> PathBuf {
+    let stamp = export_timestamp();
+    let candidate = base.join(&stamp);
+    if !candidate.exists() {
+        return candidate;
+    }
+    for index in 2..1000 {
+        let next = base.join(format!("{stamp}-{index}"));
+        if !next.exists() {
+            return next;
+        }
+    }
+    candidate
 }
 
 fn is_secret_key(key: &str) -> bool {

@@ -1025,3 +1025,150 @@ fn usage_and_gc_contracts() {
     assert_eq!(code, 0);
     assert_eq!(json["data"]["removed"], Value::from(0));
 }
+
+/// 本机是否具备 ffmpeg（缺失时跳过相关导出测试）。
+fn ffmpeg_available(sandbox: &Sandbox) -> bool {
+    let (code, json) = sandbox.run_json(&["--json", "doctor", "--skip-network"]);
+    assert_eq!(code, 0, "{json}");
+    json["data"]["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|check| check["name"] == "ffmpeg" && check["status"] == "ok")
+}
+
+fn batch_all(sandbox: &Sandbox, base_url: &str, project_arg: &str) -> Value {
+    let (code, json) = sandbox.run_json_with_api(
+        base_url,
+        "test-key",
+        &[
+            "--json",
+            "batch",
+            "--project",
+            project_arg,
+            "--concurrency",
+            "1",
+        ],
+    );
+    assert_eq!(code, 0, "批量生成失败：{json}");
+    json
+}
+
+#[test]
+fn export_wav_flat_and_overwrite_guard() {
+    let sandbox = Sandbox::new();
+    let server = support::MockServer::start(vec![support::MockResponse::json(
+        support::chat_response_with_wav(&support::tiny_wav()),
+    )]);
+    let (project_dir, project_arg, _) = setup_project(
+        &sandbox,
+        "阿岚: 第一句\n小满: 第二句\n",
+        &[("阿岚", "冰糖"), ("小满", "苏打")],
+    );
+    batch_all(&sandbox, &server.base_url, &project_arg);
+
+    let (code, json) = sandbox.run_json(&["--json", "export", "--project", &project_arg]);
+    assert_eq!(code, 0, "导出失败：{json}");
+    validate("cli/export.schema.json", &json);
+    assert_eq!(json["data"]["format"], Value::from("wav"));
+    assert_eq!(json["data"]["count"], Value::from(2));
+    assert_eq!(json["data"]["ffmpeg_used"], Value::Bool(false));
+    assert_eq!(json["data"]["concat"], Value::Null);
+
+    let out_dir = PathBuf::from(json["data"]["out_dir"].as_str().unwrap());
+    assert!(out_dir.starts_with(&project_dir));
+    let manifest = PathBuf::from(json["data"]["manifest"].as_str().unwrap());
+    assert!(manifest.is_file(), "manifest 应存在");
+    for item in json["data"]["items"].as_array().unwrap() {
+        let file = out_dir.join(item["file"].as_str().unwrap());
+        assert!(file.is_file(), "导出文件缺失：{}", file.display());
+    }
+
+    // 覆盖保护：非空输出目录 + 未确认 → 退出码 4
+    let out_arg = out_dir.to_str().unwrap();
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "export",
+        "--project",
+        &project_arg,
+        "--out",
+        out_arg,
+    ]);
+    assert_eq!(code, 4, "{json}");
+    assert_eq!(json["error"]["code"], Value::from("E_CONFIRM_REQUIRED"));
+
+    // --yes 覆盖成功
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "export",
+        "--project",
+        &project_arg,
+        "--out",
+        out_arg,
+        "--yes",
+    ]);
+    assert_eq!(code, 0, "{json}");
+    assert_eq!(json["data"]["count"], Value::from(2));
+}
+
+#[test]
+fn export_mp3_role_layout_with_concat() {
+    let sandbox = Sandbox::new();
+    if !ffmpeg_available(&sandbox) {
+        eprintln!("跳过：本机未安装 ffmpeg");
+        return;
+    }
+    let server = support::MockServer::start(vec![support::MockResponse::json(
+        support::chat_response_with_wav(&support::tone_wav(1_000)),
+    )]);
+    let (_, project_arg, _) = setup_project(
+        &sandbox,
+        "阿岚: 第一句\n小满: 第二句\n",
+        &[("阿岚", "冰糖"), ("小满", "苏打")],
+    );
+    batch_all(&sandbox, &server.base_url, &project_arg);
+
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "export",
+        "--project",
+        &project_arg,
+        "--format",
+        "mp3",
+        "--layout",
+        "role",
+        "--concat",
+        "--normalize",
+        "--trim-silence",
+    ]);
+    assert_eq!(code, 0, "mp3 导出失败：{json}");
+    validate("cli/export.schema.json", &json);
+    assert_eq!(json["data"]["format"], Value::from("mp3"));
+    assert_eq!(json["data"]["layout"], Value::from("role"));
+    assert_eq!(json["data"]["ffmpeg_used"], Value::Bool(true));
+
+    let out_dir = PathBuf::from(json["data"]["out_dir"].as_str().unwrap());
+    for item in json["data"]["items"].as_array().unwrap() {
+        let file = item["file"].as_str().unwrap();
+        assert!(file.ends_with(".mp3"), "应为 mp3：{file}");
+        assert!(file.contains('/'), "role 布局应分子目录：{file}");
+        let path = out_dir.join(file);
+        assert!(path.is_file());
+        assert!(
+            std::fs::metadata(&path).unwrap().len() > 0,
+            "mp3 不应为空文件"
+        );
+    }
+
+    let concat = json["data"]["concat"].as_str().expect("应有拼接文件");
+    let concat_path = out_dir.join(concat);
+    assert!(concat_path.is_file(), "拼接文件缺失");
+    assert!(concat.ends_with("full.mp3"));
+
+    let manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(out_dir.join("manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["items"].as_array().unwrap().len(), 2);
+    assert_eq!(manifest["concat"], Value::from("full.mp3"));
+    assert_eq!(manifest["format"], Value::from("mp3"));
+}

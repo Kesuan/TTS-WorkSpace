@@ -143,6 +143,20 @@ pub fn tiny_wav() -> Vec<u8> {
     tts_core::audio::pcm16_to_wav(&vec![0u8; 4_800], 24_000).expect("生成测试 WAV 失败")
 }
 
+/// 指定时长的 440Hz 正弦波 WAV（用于需要真实音频内容的测试，如 trim/normalize/拼接）。
+pub fn tone_wav(duration_ms: u32) -> Vec<u8> {
+    let sample_rate = 24_000u32;
+    let frames = sample_rate * duration_ms / 1000;
+    let mut pcm = Vec::with_capacity(frames as usize * 2);
+    for index in 0..frames {
+        let t = index as f32 / sample_rate as f32;
+        let value = (t * 440.0 * std::f32::consts::TAU).sin() * 0.5;
+        let sample = (value * i16::MAX as f32) as i16;
+        pcm.extend_from_slice(&sample.to_le_bytes());
+    }
+    tts_core::audio::pcm16_to_wav(&pcm, sample_rate).expect("生成测试音频失败")
+}
+
 /// 非流式 chat.completions 响应（音频为 base64 WAV）。
 pub fn chat_response_with_wav(wav: &[u8]) -> String {
     use base64::Engine as _;

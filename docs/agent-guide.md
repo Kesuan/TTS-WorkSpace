@@ -64,7 +64,7 @@ tts synth --project ./works/rainy-station --line L3f2a9c01 --voice 冰糖 --styl
 
 要点：相同参数重跑命中缓存（`cached: true`，不重复请求、不再等待）；失败同样写审计（`error_code`）；`--stream` 仅预置音色模型可用。
 
-### 3.1 从剧本到批量配音（主流程；takes / export 为 🚧）
+### 3.1 从剧本到批量配音（主流程；✅ 全部已实现）
 
 ```bash
 # 1) 初始化 + 导入（✅ 已实现）
@@ -90,8 +90,9 @@ tts cast --project ./works/rainy-station --line L3f2a9c01 --voices 冰糖,茉莉
 tts usage --since 2026-10 --json
 tts gc --dry-run --json
 
-# 6) 导出（🚧 M1 最后一步）
+# 6) 导出（✅）
 tts export --project ./works/rainy-station --format mp3 --layout role --concat --json
+#    → <项目>/exports/<时间戳>/ 下逐行音频 + manifest.json（+ full.mp3）
 ```
 
 要点：

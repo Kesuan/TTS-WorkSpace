@@ -62,12 +62,15 @@ tts cast --project ./works/rainy-station --line L3f2a9c01 --voices 冰糖,茉莉
 tts usage --since 2026-10 --json
 tts gc --dry-run --json
 
+# 导出（M1）
+tts export --project ./works/rainy-station --format mp3 --layout role --concat --json
+
 # 单条合成（幂等缓存 + 审计；--line 联动项目 take）
 tts synth --text "早上好！" --voice 冰糖 --json
 tts synth --project ./works/rainy-station --line L3f2a9c01 --voice 冰糖 --style "(低沉)"
 ```
 
-计划中（M1 最后一步）：`export`；M2：`voice` · `design` · `clone`。
+M1 已全部可用；下一步 M2：`voice` · `design` · `clone`（音色库与设计→克隆固化）。
 
 ## 仓库结构
 
@@ -103,8 +106,8 @@ tools/lint     # fmt + clippy(-D warnings) + 前端 lint
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
 | M0 | 骨架 + 契约（doctor / config / schema / 文档 / 工具链） | ✅ 完成 |
-| M1 | CLI 端到端：合成 / 项目 / 对白解析 / 批量队列 / Take / 导出 / 用量 | 开发中 |
-| M2 | 音色库：音色设计、克隆、设计→克隆固化、Cast 对比 | 计划 |
+| M1 | CLI 端到端：合成 / 项目 / 对白解析 / 批量队列 / Take / 导出 / 用量 | ✅ 完成 |
+| M2 | 音色库：音色设计、克隆、设计→克隆固化、Cast 对比增强 | 计划 |
 | M3 | GUI：Tauri 2 + React + animal-island-ui（试听 / 对比 / 批量监控） | 计划 |
 | M4 | 候选：ASR 校验、MCP Server、打包分发、多 Provider | 候选 |
 

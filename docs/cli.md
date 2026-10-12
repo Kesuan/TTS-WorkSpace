@@ -58,14 +58,14 @@
 | `E_AUDIO_DECODE` | 1 | 音频解码失败（base64 / WAV / PCM） | ✅ |
 | `E_AUDIO_ENCODE` | 1 | WAV 编码失败 | ✅ |
 | `E_CACHE_IO` | 1 | 缓存读写失败 | ✅ |
-| `E_FFMPEG_MISSING` | 1 | 需要 ffmpeg 但未找到 | 🚧 |
-| `E_FFMPEG_FAILED` | 1 | ffmpeg 执行失败 | 🚧 |
+| `E_FFMPEG_MISSING` | 1 | 需要 ffmpeg 但未找到 | ✅ |
+| `E_FFMPEG_FAILED` | 1 | ffmpeg 执行失败（details/消息含 stderr 摘要） | ✅ |
 | `E_NOT_FOUND` | 1 | 目标不存在（项目 / 行 / take / 音色 / 脚本） | ✅ |
 | `E_PARSE_SCRIPT` | 1 | 对白脚本解析失败（details 带 file/line/col） | ✅ |
 | `E_LINE_UNBOUND` | 2 | 批量前置校验：存在未绑定音色的行 | ✅ |
 | `E_PARTIAL` | 3 | 批量部分失败（details 带 summary 与 failed_lines） | ✅ |
 | `E_CAPABILITY` | 2 | 模型不支持该能力（如对设计模型使用 `--stream`） | ✅ |
-| `E_CONFIRM_REQUIRED` | 4 | 危险操作需要 `--yes` | 🚧 |
+| `E_CONFIRM_REQUIRED` | 4 | 危险操作需要 `--yes`（覆盖非空导出目录等） | ✅ |
 | `E_DOCTOR_UNHEALTHY` | 1 | `doctor` 存在失败项（明细在 `details`） | ✅ |
 | `E_NOT_IMPLEMENTED` | 2 | 功能未实现 | ✅（保留） |
 
@@ -347,9 +347,55 @@ tts gc --project ./works/rainy-station --json   # 额外扫描指定项目（默
 - 引用来源：项目 `lines.json` 中各 take 的 `cache_key`。
 - Schema：[`gc`](../schemas/cli/gc.schema.json)
 
+### `tts export`
+
+导出已生成音频（逐行文件 / 目录布局 / 整轨拼接 / 清单）。
+
+| 参数 | 说明 |
+| --- | --- |
+| `--project <目录>` | 项目目录（默认当前目录） |
+| `--out <目录>` | 输出目录（默认 `<项目>/exports/<时间戳>`；非空时需 `--yes`） |
+| `--format wav\|mp3` | 输出格式（默认 wav；wav 无处理时直接复制，零转码） |
+| `--layout flat\|role\|scene` | 目录布局（默认 flat；role/scene 按角色/场景分子目录） |
+| `--name <模板>` | 文件名模板，占位符：`{seq}` `{role}` `{line}` `{take}` `{scene}` `{chapter}`（默认 `{seq}_{role}_{line}`） |
+| `--concat` | 生成整轨拼接文件 `full.<ext>`（按行序） |
+| `--normalize` | 响度归一化（ffmpeg loudnorm，-16 LUFS） |
+| `--trim-silence` | 裁剪首尾静音（ffmpeg silenceremove，-45dB） |
+| `--line <ID>` / `--scene <名>` | 仅导出指定行 / 场景 |
+
+行为契约（Schema：[`export`](../schemas/cli/export.schema.json)）：
+
+- **导出对象**：非 removed 且有 `selected_take` 的行（用 `tts takes select` 决定）；pending 行默认跳过，显式 `--line` 指定 pending 行 → `E_USAGE`。
+- **take 文件缺失** → `E_NOT_FOUND`（提示重新生成）。
+- **ffmpeg 依赖**：`--format mp3` / `--concat` / `--normalize` / `--trim-silence` 需要 ffmpeg；缺失 → `E_FFMPEG_MISSING`（wav 直复制路径不需要）。
+- **覆盖保护**：`--out` 指向非空目录且未加 `--yes` → `E_CONFIRM_REQUIRED`（退出码 4）。
+- **清单**：始终写入 `manifest.json`（`items` 含 `line_id / role / scene / chapter / index / take_id / file / duration_ms / chars`，供下游工程消费）。
+- 导出同样写入审计（`cmd: "export"`）。
+
+输出示例：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "project": "/…/rainy-station",
+    "out_dir": "/…/rainy-station/exports/20261012-182530",
+    "format": "mp3",
+    "layout": "role",
+    "manifest": "/…/manifest.json",
+    "concat": "/…/full.mp3",
+    "ffmpeg_used": true,
+    "count": 42,
+    "items": [
+      { "line_id": "L3f2a9c01", "role": "阿岚", "scene": "雨夜", "chapter": "第一章", "index": 1, "take_id": "0002", "file": "阿岚/0001_阿岚_L3f2a9c01.mp3", "duration_ms": 1820, "chars": 12 }
+    ]
+  }
+}
+```
+
 ---
 
-## 计划中命令（🚧 M1 / M2）
+## 计划中命令（🚧 M2）
 
 > 以下命令尚未实现，接口可能微调；实现后将补全参数表与 Schema。
 
@@ -360,4 +406,3 @@ tts gc --project ./works/rainy-station --json   # 额外扫描指定项目（默
 | `tts design solidify --take <id> --name <名>` | 设计 → 克隆固化（保证跨句一致） |
 | `tts clone --sample <文件> --name <名>` | 创建克隆音色（≤10MB、wav/mp3、base64 data URL） |
 | `tts project rm` | 删除项目（需 `--yes`） |
-| `tts export [--format mp3] [--layout role\|scene\|flat] [--concat]` | 导出（逐行文件 / 分目录 / 整轨 / 清单） |
