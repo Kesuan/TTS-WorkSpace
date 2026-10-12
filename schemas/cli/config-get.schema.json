@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/config-get.schema.json",
+  "title": "tts config get --json 成功输出",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": ["key", "value", "masked"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "value": {},
+        "masked": {
+          "type": "boolean",
+          "description": "true 表示 value 已打码（仅 api.api_key 且未加 --reveal）"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/config-set.schema.json",
+  "title": "tts config set --json 成功输出",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": ["key", "value", "config_path"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "value": {
+          "type": ["string", "null"],
+          "description": "api.api_key 已打码（空值清除时为 null），其余为原值"
+        },
+        "config_path": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

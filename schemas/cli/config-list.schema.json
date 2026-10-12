@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/config-list.schema.json",
+  "title": "tts config list --json 成功输出",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": ["config_path", "exists", "api_key_source", "config"],
+      "properties": {
+        "config_path": { "type": "string", "minLength": 1 },
+        "exists": { "type": "boolean" },
+        "api_key_source": { "enum": ["env", "config", "missing"] },
+        "config": {
+          "type": "object",
+          "required": ["schema_version", "api", "models", "generation", "ffmpeg"],
+          "properties": {
+            "schema_version": { "type": "integer" },
+            "api": {
+              "type": "object",
+              "required": ["base_url", "timeout_ms"],
+              "properties": {
+                "base_url": { "type": "string" },
+                "api_key": { "type": ["string", "null"] },
+                "timeout_ms": { "type": "integer" }
+              },
+              "additionalProperties": true
+            },
+            "models": {
+              "type": "object",
+              "required": ["tts", "design", "clone"],
+              "properties": {
+                "tts": { "type": "string" },
+                "design": { "type": "string" },
+                "clone": { "type": "string" }
+              },
+              "additionalProperties": true
+            },
+            "generation": {
+              "type": "object",
+              "required": ["concurrency", "max_chars_per_request", "retry"],
+              "properties": {
+                "concurrency": { "type": "integer" },
+                "max_chars_per_request": { "type": "integer" },
+                "retry": {
+                  "type": "object",
+                  "required": ["max", "backoff_ms"],
+                  "properties": {
+                    "max": { "type": "integer" },
+                    "backoff_ms": { "type": "integer" }
+                  },
+                  "additionalProperties": true
+                }
+              },
+              "additionalProperties": true
+            },
+            "ffmpeg": {
+              "type": "object",
+              "required": ["path"],
+              "properties": { "path": { "type": "string" } },
+              "additionalProperties": true
+            },
+            "workspace_root": { "type": ["string", "null"] }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

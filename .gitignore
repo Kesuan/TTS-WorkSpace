@@ -1,0 +1,16 @@
+# ---- Rust ----
+/target
+**/target
+Cargo.lock.orig
+
+# ---- 前端（M3）----
+node_modules/
+ui/dist/
+ui/node_modules/
+
+# ---- 运行产物 ----
+test-results/
+*.log
+
+# ---- 系统 ----
+.DS_Store

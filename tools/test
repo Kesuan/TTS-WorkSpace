@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# TTS-WorkSpace 统一测试入口
+#
+# 用法：
+#   tools/test [--filter <子串>] [--min-tests N] [--no-frontend]
+#
+# 退出码：0 全部通过 · 1 测试失败 · 2 内部错误（工具链缺失等）· 3 未发现测试 / 低于下限（防假绿）
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT" || exit 2
+
+FILTER=""
+MIN_TESTS=1
+RUN_FRONTEND=1
+
+usage() {
+  cat <<'EOF'
+用法：tools/test [选项]
+
+选项：
+  --filter <子串>   仅运行名称匹配的测试（传给 cargo test）
+  --min-tests <N>   用例数下限，低于视为失败（默认 1；防“假绿”）
+  --no-frontend     跳过前端检查（ui/ 存在时默认执行 typecheck + lint）
+  -h, --help        显示帮助
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --filter) FILTER="${2:-}"; shift 2 ;;
+    --min-tests) MIN_TESTS="${2:-}"; shift 2 ;;
+    --no-frontend) RUN_FRONTEND=0; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "未知参数：$1"; usage; exit 2 ;;
+  esac
+done
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "错误：未找到 cargo（需要 Rust 工具链，见 README）" >&2
+  exit 2
+fi
+
+echo "==> cargo test（workspace）"
+if [[ -n "$FILTER" ]]; then
+  cargo test --workspace --no-fail-fast -- "$FILTER"
+else
+  cargo test --workspace --no-fail-fast
+fi
+STATUS=$?
+if [[ $STATUS -ne 0 ]]; then
+  echo "==> 测试失败（exit=${STATUS}）"
+  exit 1
+fi
+
+COUNT=$(cargo test --workspace -- --list 2>/dev/null | grep -c ': test$')
+echo "==> 发现用例数：${COUNT}（下限 ${MIN_TESTS}）"
+if [[ "$COUNT" -lt "$MIN_TESTS" ]]; then
+  echo "==> 未达标：用例数 ${COUNT} < ${MIN_TESTS}（防假绿）"
+  exit 3
+fi
+
+if [[ "$RUN_FRONTEND" -eq 1 && -f ui/package.json ]]; then
+  if command -v npm >/dev/null 2>&1; then
+    echo "==> 前端检查（typecheck + lint）"
+    (cd ui && npm run --silent typecheck && npm run --silent lint) || exit 1
+  else
+    echo "==> 警告：ui/ 存在但未找到 npm，跳过前端检查"
+  fi
+fi
+
+echo "==> 全部通过"
+exit 0
