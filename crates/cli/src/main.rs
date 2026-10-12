@@ -31,7 +31,6 @@ use tts_core::provider::{AudioFormat, VoiceRef};
 use tts_core::script::ParseOptions;
 use tts_core::synth::{self, SynthOptions};
 use tts_core::usage;
-use tts_core::voices::PRESET_VOICES;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -1755,48 +1754,6 @@ fn parse_tags(raw: &Option<String>) -> Vec<String> {
         .collect()
 }
 
-fn voice_json_preset(preset: &tts_core::voices::PresetVoice) -> Value {
-    json!({
-        "id": preset.id,
-        "name": preset.name,
-        "kind": "preset",
-        "builtin": true,
-        "model": null,
-        "preset_name": preset.id,
-        "design_prompt": null,
-        "source_voice": null,
-        "sample_file": null,
-        "sample_sha256": null,
-        "tags": [],
-        "notes": "",
-        "created_at": null,
-        "has_sample": false,
-        "language": preset.language,
-        "gender": preset.gender,
-    })
-}
-
-fn voice_json_entry(entry: &VoiceEntry, has_sample: bool) -> Value {
-    json!({
-        "id": entry.id,
-        "name": entry.name,
-        "kind": entry.kind,
-        "builtin": false,
-        "model": entry.model,
-        "preset_name": entry.preset_name,
-        "design_prompt": entry.design_prompt,
-        "source_voice": entry.source_voice,
-        "sample_file": entry.sample_file,
-        "sample_sha256": entry.sample_sha256,
-        "tags": entry.tags,
-        "notes": entry.notes,
-        "created_at": entry.created_at,
-        "has_sample": has_sample,
-        "language": null,
-        "gender": null,
-    })
-}
-
 fn cmd_voice(cli: &Cli, args: &VoiceArgs) -> Result<CmdOutput> {
     let paths = Paths::resolve()?;
     paths.ensure_layout()?;
@@ -1804,41 +1761,8 @@ fn cmd_voice(cli: &Cli, args: &VoiceArgs) -> Result<CmdOutput> {
 
     match &args.cmd {
         VoiceCmd::List { kind } => {
-            let filter = kind.as_deref();
-            if let Some(filter) = filter {
-                if !matches!(filter, "preset" | "design" | "clone") {
-                    return Err(TtsError::usage(
-                        E_USAGE,
-                        format!("未知类型：{filter}（preset | design | clone）"),
-                    ));
-                }
-            }
-
-            let mut voices: Vec<Value> = Vec::new();
-            if filter.is_none() || filter == Some("preset") {
-                for preset in PRESET_VOICES {
-                    voices.push(voice_json_preset(preset));
-                }
-            }
-            for entry in library.list()? {
-                if let Some(filter) = filter {
-                    if entry.kind != filter {
-                        continue;
-                    }
-                }
-                let has_sample = entry
-                    .sample_file
-                    .as_ref()
-                    .map(|file| library.root().join(&entry.id).join(file).is_file())
-                    .unwrap_or(false);
-                voices.push(voice_json_entry(&entry, has_sample));
-            }
-
-            let data = json!({
-                "library_dir": library.root().display().to_string(),
-                "total": voices.len(),
-                "voices": voices,
-            });
+            let data = library::list_json(&library, kind.as_deref())?;
+            let voices = data["voices"].as_array().cloned().unwrap_or_default();
             let mut human = format!("共 {} 个音色：", voices.len());
             for voice in &voices {
                 human.push_str(&format!(
@@ -1859,7 +1783,7 @@ fn cmd_voice(cli: &Cli, args: &VoiceArgs) -> Result<CmdOutput> {
                 let has_sample = record.sample_path().is_some();
                 let data = json!({
                     "library_dir": library.root().display().to_string(),
-                    "voice": voice_json_entry(&record.entry, has_sample),
+                    "voice": library::entry_to_json(&record.entry, has_sample),
                 });
                 let human = format!(
                     "{}（{}）kind={} model={}",
@@ -1868,13 +1792,13 @@ fn cmd_voice(cli: &Cli, args: &VoiceArgs) -> Result<CmdOutput> {
                 return Ok(CmdOutput { data, human });
             }
             let needle = name.trim();
-            if let Some(preset) = PRESET_VOICES
+            if let Some(preset) = tts_core::voices::PRESET_VOICES
                 .iter()
                 .find(|preset| preset.id == needle || preset.name == needle)
             {
                 let data = json!({
                     "library_dir": library.root().display().to_string(),
-                    "voice": voice_json_preset(preset),
+                    "voice": library::preset_to_json(preset),
                 });
                 let human = format!(
                     "{}（预置，{} / {}）",

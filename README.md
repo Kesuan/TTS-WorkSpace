@@ -4,9 +4,9 @@
 
 - **定位**：批量与工程化的 TTS 生产工具（项目 / 音色库 / Take 管理 / 导出 / 用量），与具体游戏或应用解耦。
 - **第一消费者是 LLM Agent**：CLI 提供稳定契约 —— 统一 JSON 信封、退出码、JSON Schema、说明书文档。
-- **GUI**（M3）：Tauri 2 + React + [animal-island-ui](https://github.com/guokaigdg/animal-island-ui)，面向人工试听、对比与批量监控。
+- **GUI**：Tauri 2 + React + [animal-island-ui](https://github.com/guokaigdg/animal-island-ui)，面向人工试听、对比与批量监控；与 CLI 共用内核与数据目录。
 
-> 当前状态：**M0（骨架与契约）完成** · M1（CLI 端到端）开发中。
+> 当前状态：**M0 / M1 / M2 / M3 完成** —— CLI 全流程 + 桌面 GUI 均可用。
 
 ## 安装
 
@@ -78,19 +78,30 @@ tts synth --project ./works/rainy-station --line L3f2a9c01 --voice "雨夜女主
 
 M1 + M2 已全部可用；下一步 M3：Tauri + React + animal-island-ui 桌面 GUI。
 
+## 桌面 GUI
+
+```bash
+tools/gui            # 安装依赖 + 构建前端 + 启动应用（dev）
+tools/gui --build    # 仅构建前端并编译桌面应用
+```
+
+四个页面：**项目**（导入剧本 / 角色绑定 / 逐行重生成 / take 试听与选用 / 批量进度 / 导出）、**音色库**（设计 / 克隆 / 固化 / 删除）、**用量**（统计 + 缓存清理）、**设置**（Key / 模型 / 并发重试 / ffmpeg / doctor）。
+详见 [docs/gui.md](docs/gui.md)。
+
 ## 仓库结构
 
 ```
 crates/
-├─ core/          # 引擎：配置 / Provider / MiMo 客户端 / 缓存 / 音频 / doctor（零 UI 依赖）
-└─ cli/           # 二进制 `tts`（Agent 主接口）+ 契约测试
+├─ core/          # 引擎：配置 / Provider / MiMo 客户端 / 缓存 / 音频 / 项目 / 批量 / 导出 / 音色库
+├─ cli/           # 二进制 `tts`（Agent 主接口）+ 契约测试
+└─ desktop/       # Tauri 2 桌面壳（命令层复用 core）
 schemas/
 ├─ cli/           # 各命令 JSON 输出 Schema（契约，测试逐项校验）
 └─ common/        # 错误信封 Schema
-docs/             # 说明书：agent-guide / cli / script-format / data-layout
+docs/             # 说明书：agent-guide / cli / script-format / data-layout / gui
 tests/fixtures/   # 共享测试夹具（回放数据，脱敏）
-tools/            # test / lint 统一入口
-ui/               # 桌面前端（M3）
+tools/            # test / lint / gui 统一入口
+ui/               # 桌面前端（Vite + React 18.3 + animal-island-ui）
 ```
 
 ## 数据目录
@@ -101,8 +112,9 @@ ui/               # 桌面前端（M3）
 ## 开发
 
 ```bash
-tools/test     # 全部测试（cargo test + schema 校验；ui/ 存在时含前端检查）
+tools/test     # 全部测试（cargo test + schema 校验 + 前端 typecheck/lint）
 tools/lint     # fmt + clippy(-D warnings) + 前端 lint
+tools/gui      # 启动桌面应用（dev）
 ```
 
 约定见 [AGENTS.md](AGENTS.md)。
@@ -114,7 +126,7 @@ tools/lint     # fmt + clippy(-D warnings) + 前端 lint
 | M0 | 骨架 + 契约（doctor / config / schema / 文档 / 工具链） | ✅ 完成 |
 | M1 | CLI 端到端：合成 / 项目 / 对白解析 / 批量队列 / Take / 导出 / 用量 | ✅ 完成 |
 | M2 | 音色库：音色设计、克隆、设计→克隆固化、库内音色全流程可用 | ✅ 完成 |
-| M3 | GUI：Tauri 2 + React + animal-island-ui（试听 / 对比 / 批量监控） | 计划 |
+| M3 | GUI：Tauri 2 + React + animal-island-ui（试听 / 对比 / 批量监控） | ✅ 完成 |
 | M4 | 候选：ASR 校验、MCP Server、打包分发、多 Provider | 候选 |
 
 ## 免责声明

@@ -1,0 +1,203 @@
+/* 页面布局（组件样式来自 animal-island-ui，见 main.tsx 的全局引入）。 */
+
+:root {
+  --tts-gap: 16px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: -apple-system, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  overflow: hidden;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 14px 18px 18px;
+  gap: 12px;
+}
+
+.app-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.app-topbar-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+.app-nav {
+  display: flex;
+  gap: 8px;
+}
+
+.app-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.grid-two {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: var(--tts-gap);
+  align-items: start;
+}
+
+.grid-two-wide {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: var(--tts-gap);
+  align-items: start;
+}
+
+/* 网格/弹性子项默认 min-width:auto 会被长内容撑破，统一归零避免横向溢出 */
+.grid-two > *,
+.grid-two-wide > * {
+  min-width: 0;
+}
+
+.app-body {
+  overflow-x: hidden;
+}
+
+/* 长路径/ID 允许任意位置断行 */
+.mono,
+.line-text,
+.tiny {
+  overflow-wrap: anywhere;
+}
+
+audio {
+  max-width: 220px;
+  min-width: 0;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.grow {
+  flex: 1;
+}
+
+.muted {
+  opacity: 0.68;
+  font-size: 12px;
+}
+
+.mono {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 12px;
+}
+
+.tiny {
+  font-size: 12px;
+}
+
+.project-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.project-list-item.active {
+  outline: 2px solid rgba(0, 0, 0, 0.18);
+  outline-offset: 1px;
+}
+
+.line-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+}
+
+.line-card + .line-card {
+  margin-top: 10px;
+}
+
+.line-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.line-text {
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.take-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.batch-progress {
+  max-height: 220px;
+  overflow: auto;
+  font-size: 12px;
+}
+
+table.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+table.data-table th,
+table.data-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  vertical-align: top;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}

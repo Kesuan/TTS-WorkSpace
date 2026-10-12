@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "TTS WorkSpace",
+  "version": "0.1.0",
+  "identifier": "dev.ttsworkspace.app",
+  "build": {
+    "beforeDevCommand": "npm --prefix ../../ui run dev",
+    "beforeBuildCommand": "npm --prefix ../../ui run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../../ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "TTS WorkSpace — MiMo 语音工作台",
+        "width": 1360,
+        "height": 880,
+        "minWidth": 1080,
+        "minHeight": 720
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": ["**"],
+          "requireLiteralLeadingDot": false
+        }
+      }
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "icon": []
+  }
+}

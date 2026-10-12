@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# TTS-WorkSpace 桌面应用启动脚本
+#
+# 用法：
+#   tools/gui            # 安装前端依赖（如缺失）并启动开发模式（vite + tauri）
+#   tools/gui --build    # 构建前端并编译桌面应用（不打包安装包）
+#
+# 说明：开发模式下 Tauri 会启动 Vite（http://localhost:5173）并打开应用窗口。
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT" || exit 2
+
+MODE="dev"
+if [[ "${1:-}" == "--build" ]]; then
+  MODE="build"
+elif [[ -n "${1:-}" ]]; then
+  echo "未知参数：$1（支持 --build）" >&2
+  exit 2
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "错误：未找到 cargo（需要 Rust 工具链，见 README）" >&2
+  exit 2
+fi
+if ! command -v npm >/dev/null 2>&1; then
+  echo "错误：未找到 npm（需要 Node.js 18+）" >&2
+  exit 2
+fi
+
+if [[ ! -d ui/node_modules ]]; then
+  echo "==> 安装前端依赖（ui/）"
+  (cd ui && npm install) || exit 1
+fi
+
+if [[ "$MODE" == "build" ]]; then
+  echo "==> 构建前端"
+  (cd ui && npm run build) || exit 1
+  echo "==> 编译桌面应用（debug）"
+  cargo build -p tts-desktop || exit 1
+  echo "==> 完成：target/debug/tts-desktop"
+  exit 0
+fi
+
+echo "==> 启动开发模式（Ctrl+C 退出）"
+echo "    提示：脚本会先构建一次前端再启动，避免 Tauri 等待打包产物"
+(cd ui && npm run build) || exit 1
+exec cargo run -p tts-desktop

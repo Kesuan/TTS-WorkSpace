@@ -300,11 +300,98 @@ pub fn validate_sample(path: &Path) -> Result<u64> {
     Ok(size)
 }
 
-fn lib_io(message: &str, path: &Path, e: std::io::Error) -> TtsError {
+pub fn lib_io(message: &str, path: &Path, e: std::io::Error) -> TtsError {
     TtsError::runtime(
         crate::error::E_IO,
         format!("{message}（{}）：{e}", path.display()),
     )
+}
+
+// ── 展示视图（CLI 与桌面 GUI 共用）────────────────────────────────
+
+/// 预置音色 → 展示 JSON。
+pub fn preset_to_json(preset: &crate::voices::PresetVoice) -> serde_json::Value {
+    serde_json::json!({
+        "id": preset.id,
+        "name": preset.name,
+        "kind": KIND_PRESET,
+        "builtin": true,
+        "model": serde_json::Value::Null,
+        "preset_name": preset.id,
+        "design_prompt": serde_json::Value::Null,
+        "source_voice": serde_json::Value::Null,
+        "sample_file": serde_json::Value::Null,
+        "sample_sha256": serde_json::Value::Null,
+        "tags": [],
+        "notes": "",
+        "created_at": serde_json::Value::Null,
+        "has_sample": false,
+        "language": preset.language,
+        "gender": preset.gender,
+    })
+}
+
+/// 库内音色 → 展示 JSON。
+pub fn entry_to_json(entry: &VoiceEntry, has_sample: bool) -> serde_json::Value {
+    serde_json::json!({
+        "id": entry.id,
+        "name": entry.name,
+        "kind": entry.kind,
+        "builtin": false,
+        "model": entry.model,
+        "preset_name": entry.preset_name,
+        "design_prompt": entry.design_prompt,
+        "source_voice": entry.source_voice,
+        "sample_file": entry.sample_file,
+        "sample_sha256": entry.sample_sha256,
+        "tags": entry.tags,
+        "notes": entry.notes,
+        "created_at": entry.created_at,
+        "has_sample": has_sample,
+        "language": serde_json::Value::Null,
+        "gender": serde_json::Value::Null,
+    })
+}
+
+fn entry_has_sample(library: &Library, entry: &VoiceEntry) -> bool {
+    entry
+        .sample_file
+        .as_ref()
+        .map(|file| library.root().join(&entry.id).join(file).is_file())
+        .unwrap_or(false)
+}
+
+/// 音色列表 JSON：`{"library_dir", "total", "voices": [...]}`；`kind` 过滤 preset/design/clone。
+pub fn list_json(library: &Library, kind: Option<&str>) -> Result<serde_json::Value> {
+    if let Some(kind) = kind {
+        if !matches!(kind, KIND_PRESET | KIND_DESIGN | KIND_CLONE) {
+            return Err(TtsError::usage(
+                E_USAGE,
+                format!("未知类型：{kind}（preset | design | clone）"),
+            ));
+        }
+    }
+
+    let mut voices: Vec<serde_json::Value> = Vec::new();
+    if kind.is_none() || kind == Some(KIND_PRESET) {
+        for preset in crate::voices::PRESET_VOICES {
+            voices.push(preset_to_json(preset));
+        }
+    }
+    for entry in library.list()? {
+        if let Some(kind) = kind {
+            if entry.kind != kind {
+                continue;
+            }
+        }
+        voices.push(entry_to_json(&entry, entry_has_sample(library, &entry)));
+    }
+
+    Ok(serde_json::json!({
+        "library_dir": library.root().display().to_string(),
+        "total": voices.len(),
+        "voices": voices,
+    }))
 }
 
 #[cfg(test)]

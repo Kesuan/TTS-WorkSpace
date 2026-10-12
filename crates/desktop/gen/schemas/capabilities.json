@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"TTS-WorkSpace 默认能力：核心 IPC 与资源（音频）读取","local":true,"windows":["main"],"permissions":["core:default"]}}

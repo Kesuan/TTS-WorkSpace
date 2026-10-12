@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "TTS-WorkSpace 默认能力：核心 IPC 与资源（音频）读取",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
