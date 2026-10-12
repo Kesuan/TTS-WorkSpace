@@ -48,7 +48,12 @@ tts config set api.api_key sk-xxxx
 # 项目与对白脚本（M1）
 tts project init ./works/rainy-station --name "雨夜车站"
 tts project import ./works/rainy-station/script/chapter1.txt --project ./works/rainy-station --json
-tts project status --project ./works/rainy-station --json
+
+# 角色绑定与批量生成（M1）
+tts role bind --role 阿岚 --voice 冰糖 --style "清亮女声" --project ./works/rainy-station
+tts batch --project ./works/rainy-station --json --events jsonl    # 幂等；失败自动重试
+tts batch status --project ./works/rainy-station --json
+tts batch retry  --project ./works/rainy-station                   # 重置失败行
 
 # 单条合成（幂等缓存 + 审计；--line 联动项目 take）
 tts synth --text "早上好！" --voice 冰糖 --json
@@ -56,7 +61,7 @@ tts synth --project ./works/rainy-station --line L3f2a9c01 --voice 冰糖 --styl
 ```
 
 计划中（M1 后续，见 [docs/cli.md](docs/cli.md)）：
-`role` · `line` · `batch` · `takes` · `cast` · `export` · `usage` · `gc`；M2：`voice` · `design` · `clone`。
+`takes` · `cast` · `export` · `usage` · `gc`；M2：`voice` · `design` · `clone`。
 
 ## 仓库结构
 

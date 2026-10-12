@@ -94,6 +94,31 @@ impl Sandbox {
         });
         (code, json)
     }
+
+    /// 指向本地 mock API 运行，按行解析 stdout（JSONL：事件 + 最后一行为信封）。
+    fn run_jsonl_with_api(
+        &self,
+        base_url: &str,
+        api_key: &str,
+        args: &[&str],
+    ) -> (i32, Vec<Value>) {
+        let mut cmd = self.cmd();
+        cmd.env("MIMO_BASE_URL", base_url)
+            .env("MIMO_API_KEY", api_key);
+        let output = cmd.args(args).output().expect("无法启动 tts 进程");
+        let code = output.status.code().unwrap_or(-1);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let lines: Vec<Value> = stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                serde_json::from_str(line)
+                    .unwrap_or_else(|e| panic!("输出行不是 JSON：{e}\n行：{line}\nstderr={stderr}"))
+            })
+            .collect();
+        (code, lines)
+    }
 }
 
 #[test]
@@ -553,4 +578,292 @@ fn synth_stream_rejected_for_design_model_and_audited() {
     let audit = std::fs::read_to_string(sandbox.path().join("audit/audit.jsonl")).unwrap();
     assert!(audit.contains("E_CAPABILITY"), "失败也应写入审计：{audit}");
     assert!(audit.contains("\"status\":\"failed\""));
+}
+
+/// 建项目 + 导入脚本 + 绑定角色，返回 (项目目录, 项目参数, 行 ID 列表)。
+fn setup_project(
+    sandbox: &Sandbox,
+    script: &str,
+    bindings: &[(&str, &str)],
+) -> (PathBuf, String, Vec<String>) {
+    let project_dir = sandbox.path().join("proj");
+    let project_arg = project_dir.to_str().unwrap().to_string();
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "project",
+        "init",
+        &project_arg,
+        "--name",
+        "批量测试",
+    ]);
+    assert_eq!(code, 0, "init 失败：{json}");
+    let script_path = project_dir.join("script/chapter1.txt");
+    std::fs::write(&script_path, script).unwrap();
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "project",
+        "import",
+        script_path.to_str().unwrap(),
+        "--project",
+        &project_arg,
+    ]);
+    assert_eq!(code, 0, "import 失败：{json}");
+    for (role, voice) in bindings {
+        let (code, json) = sandbox.run_json(&[
+            "--json",
+            "role",
+            "bind",
+            "--role",
+            role,
+            "--voice",
+            voice,
+            "--project",
+            &project_arg,
+        ]);
+        assert_eq!(code, 0, "role bind 失败：{json}");
+    }
+    let lines: Value =
+        serde_json::from_str(&std::fs::read_to_string(project_dir.join("lines.json")).unwrap())
+            .unwrap();
+    let ids = lines["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["id"].as_str().unwrap().to_string())
+        .collect();
+    (project_dir, project_arg, ids)
+}
+
+#[test]
+fn role_bind_and_line_set_contracts() {
+    let sandbox = Sandbox::new();
+    let (_, project_arg, ids) = setup_project(&sandbox, "阿岚: 又是这样的雨……\n", &[]);
+
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "role",
+        "bind",
+        "--role",
+        "阿岚",
+        "--voice",
+        "冰糖",
+        "--style",
+        "清亮",
+        "--project",
+        &project_arg,
+    ]);
+    assert_eq!(code, 0, "{json}");
+    validate("cli/role-bind.schema.json", &json);
+    assert_eq!(json["data"]["voice"], Value::from("冰糖"));
+    assert_eq!(json["data"]["roles_total"], Value::from(1));
+
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "line",
+        "set",
+        "--line",
+        &ids[0],
+        "--style",
+        "(低沉)",
+        "--project",
+        &project_arg,
+    ]);
+    assert_eq!(code, 0, "{json}");
+    validate("cli/line-set.schema.json", &json);
+    assert_eq!(json["data"]["overrides"]["style"], Value::from("(低沉)"));
+
+    // 无修改参数 → E_USAGE
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "line",
+        "set",
+        "--line",
+        &ids[0],
+        "--project",
+        &project_arg,
+    ]);
+    assert_eq!(code, 2);
+    assert_eq!(json["error"]["code"], Value::from("E_USAGE"));
+
+    // 未知行 → E_NOT_FOUND
+    let (code, json) = sandbox.run_json(&[
+        "--json",
+        "line",
+        "set",
+        "--line",
+        "L00000000",
+        "--style",
+        "x",
+        "--project",
+        &project_arg,
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(json["error"]["code"], Value::from("E_NOT_FOUND"));
+}
+
+#[test]
+fn batch_fails_fast_when_role_unbound() {
+    let sandbox = Sandbox::new();
+    let (_, project_arg, _) = setup_project(&sandbox, "阿岚: 台词\n", &[]);
+
+    let (code, json) = sandbox.run_json(&["--json", "batch", "--project", &project_arg]);
+    assert_eq!(code, 2);
+    validate("common/envelope-error.schema.json", &json);
+    assert_eq!(json["error"]["code"], Value::from("E_LINE_UNBOUND"));
+    assert_eq!(
+        json["error"]["details"]["line_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn batch_generates_with_jsonl_events() {
+    let sandbox = Sandbox::new();
+    let server = support::MockServer::start(vec![support::MockResponse::json(
+        support::chat_response_with_wav(&support::tiny_wav()),
+    )]);
+    let (project_dir, project_arg, _) = setup_project(
+        &sandbox,
+        "阿岚: 第一句\n小满: 第二句\n",
+        &[("阿岚", "冰糖"), ("小满", "苏打")],
+    );
+
+    let (code, lines) = sandbox.run_jsonl_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "batch",
+            "--project",
+            &project_arg,
+            "--concurrency",
+            "1",
+            "--events",
+            "jsonl",
+        ],
+    );
+    assert_eq!(code, 0, "批量应成功：{lines:?}");
+
+    let events: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| line["event"].as_str())
+        .collect();
+    assert_eq!(events.first(), Some(&"started"));
+    assert_eq!(events.last(), Some(&"finished"));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| **event == "line_succeeded")
+            .count(),
+        2
+    );
+
+    // 最后一行是统一信封
+    let envelope = lines.last().unwrap();
+    validate("cli/batch.schema.json", envelope);
+    assert_eq!(envelope["data"]["summary"]["succeeded"], Value::from(2));
+
+    // take 文件落盘
+    let stored: Value =
+        serde_json::from_str(&std::fs::read_to_string(project_dir.join("lines.json")).unwrap())
+            .unwrap();
+    for line in stored["lines"].as_array().unwrap() {
+        assert_eq!(line["status"], Value::from("ok"));
+        let take_file = line["takes"][0]["file"].as_str().unwrap();
+        assert!(project_dir.join(take_file).is_file(), "缺少 {take_file}");
+    }
+}
+
+#[test]
+fn batch_partial_failure_then_retry_succeeds() {
+    let sandbox = Sandbox::new();
+    let server = support::MockServer::start(vec![
+        support::MockResponse::json(support::chat_response_with_wav(&support::tiny_wav())),
+        support::MockResponse::error(500, r#"{"error":{"message":"boom"}}"#),
+        support::MockResponse::json(support::chat_response_with_wav(&support::tiny_wav())),
+    ]);
+    // 关闭重试，避免测试等待退避
+    for (key, value) in [
+        ("generation.retry.max", "0"),
+        ("generation.retry.backoff_ms", "0"),
+    ] {
+        let (code, json) = sandbox.run_json(&["--json", "config", "set", key, value]);
+        assert_eq!(code, 0, "{json}");
+    }
+
+    let (project_dir, project_arg, _) = setup_project(
+        &sandbox,
+        "阿岚: 第一句\n小满: 第二句\n",
+        &[("阿岚", "冰糖"), ("小满", "苏打")],
+    );
+
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "batch",
+            "--project",
+            &project_arg,
+            "--concurrency",
+            "1",
+        ],
+    );
+    assert_eq!(code, 3, "部分失败应为退出码 3：{json}");
+    validate("common/envelope-error.schema.json", &json);
+    assert_eq!(json["error"]["code"], Value::from("E_PARTIAL"));
+    assert_eq!(
+        json["error"]["details"]["summary"]["failed"],
+        Value::from(1)
+    );
+    assert_eq!(
+        json["error"]["details"]["failed_lines"][0]["code"],
+        Value::from("E_HTTP_STATUS")
+    );
+
+    // 失败行状态为 failed
+    let (code, json) = sandbox.run_json(&["--json", "batch", "status", "--project", &project_arg]);
+    assert_eq!(code, 0);
+    validate("cli/batch-status.schema.json", &json);
+    assert_eq!(json["data"]["counts"]["failed"], Value::from(1));
+    assert_eq!(json["data"]["counts"]["ok"], Value::from(1));
+
+    // 重置失败行
+    let (code, json) = sandbox.run_json(&["--json", "batch", "retry", "--project", &project_arg]);
+    assert_eq!(code, 0);
+    validate("cli/batch-retry.schema.json", &json);
+    assert_eq!(json["data"]["reset"], Value::from(1));
+
+    // 重跑：跳过已 ok，失败行成功
+    let (code, json) = sandbox.run_json_with_api(
+        &server.base_url,
+        "test-key",
+        &[
+            "--json",
+            "batch",
+            "--project",
+            &project_arg,
+            "--concurrency",
+            "1",
+        ],
+    );
+    assert_eq!(code, 0, "重跑应成功：{json}");
+    validate("cli/batch.schema.json", &json);
+    assert_eq!(json["data"]["summary"]["succeeded"], Value::from(1));
+    assert_eq!(json["data"]["summary"]["skipped"], Value::from(1));
+
+    // 全部 ok
+    let (code, json) = sandbox.run_json(&["--json", "batch", "status", "--project", &project_arg]);
+    assert_eq!(code, 0);
+    assert_eq!(json["data"]["counts"]["total"], Value::from(2));
+    assert_eq!(json["data"]["counts"]["ok"], Value::from(2));
+
+    let stored: Value =
+        serde_json::from_str(&std::fs::read_to_string(project_dir.join("lines.json")).unwrap())
+            .unwrap();
+    assert_eq!(stored["lines"][1]["status"], Value::from("ok"));
+    assert_eq!(stored["lines"][1]["takes"].as_array().unwrap().len(), 1);
 }

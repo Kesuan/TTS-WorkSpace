@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/batch-status.schema.json",
+  "title": "tts batch status --json 成功输出",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": ["project", "name", "counts", "failed_lines", "unbound_roles"],
+      "properties": {
+        "project": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "counts": {
+          "type": "object",
+          "required": ["total", "pending", "ok", "failed", "removed"],
+          "properties": {
+            "total": { "type": "integer", "minimum": 0 },
+            "pending": { "type": "integer", "minimum": 0 },
+            "ok": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 },
+            "removed": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "failed_lines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["line_id", "role", "index", "scene", "text"],
+            "properties": {
+              "line_id": { "type": "string", "minLength": 1 },
+              "role": { "type": "string", "minLength": 1 },
+              "index": { "type": "integer", "minimum": 0 },
+              "scene": { "type": ["string", "null"] },
+              "text": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "unbound_roles": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

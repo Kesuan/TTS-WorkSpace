@@ -29,7 +29,10 @@ tts doctor --json           # 环境自检；离线环境用 --skip-network
 | --- | --- |
 | `E_HTTP_NETWORK` | 指数退避重试（1s/2s/4s，≤3 次） |
 | `E_HTTP_RATE_LIMIT` | 等待 30s 后重试；降低 `--concurrency` |
+| `E_HTTP_STATUS`（5xx） | 可重试；批量模式已内置退避重试 |
+| `E_PARTIAL`（退出码 3） | 部分失败：读 `details.failed_lines`，修复后重跑（幂等） |
 | `E_CONFIG_KEY` | 先配置 Key 或导出 `MIMO_API_KEY`，不要重试 |
+| `E_LINE_UNBOUND` | 先 `tts role bind` / `tts line set` 绑定音色，再跑 batch |
 | `E_USAGE` | 修改参数，不要重试 |
 | `E_CAPABILITY` | 换模型或去掉该参数（如对流式限制的模型去掉 `--stream`） |
 
@@ -61,25 +64,35 @@ tts synth --project ./works/rainy-station --line L3f2a9c01 --voice 冰糖 --styl
 
 要点：相同参数重跑命中缓存（`cached: true`，不重复请求、不再等待）；失败同样写审计（`error_code`）；`--stream` 仅预置音色模型可用。
 
-### 3.1 从剧本到批量配音（主流程，🚧）
-
-> 批量与导出命令（`batch` / `takes` / `export`）将在 M1 后续里程碑交付；接口见 [docs/cli.md](cli.md) 计划表。
+### 3.1 从剧本到批量配音（主流程；takes / export 为 🚧）
 
 ```bash
-tts project init ./works/rainy-station
-tts project import --project ./works/rainy-station script/chapter1.txt --json   # 解析报告：角色/告警/unbound_roles
-tts role bind --project ./works/rainy-station --role 阿岚 --voice 冰糖 --style "年轻的清亮女声，语速偏快"
-tts batch --project ./works/rainy-station --all --events jsonl                  # 幂等：重跑自动跳过已完成
+# 1) 初始化 + 导入（✅ 已实现）
+tts project init ./works/rainy-station --name "雨夜车站"
+tts project import ./works/rainy-station/script/chapter1.txt --project ./works/rainy-station --json
+#    → 解析报告含 unbound_roles：批量前必须全部绑定
+
+# 2) 绑定角色音色（✅）
+tts role bind --role 阿岚 --voice 冰糖 --style "年轻的清亮女声，语速偏快" --project ./works/rainy-station
+tts line set --line L3f2a9c01 --style "(低语) 我没事，真的。" --project ./works/rainy-station   # 行级覆盖（可选）
+
+# 3) 批量生成（✅ 幂等：重跑自动跳过已完成；失败行自动重试）
+tts batch --project ./works/rainy-station --json --events jsonl     # 事件流 + 最终信封（最后一行）
+
+# 4) 失败处理（✅）
+tts batch status --project ./works/rainy-station --json             # 查看失败行
+tts batch retry  --project ./works/rainy-station                    # 重置失败行后重跑 batch
+
+# 5) Take 与导出（🚧 M1 后续）
 tts takes list --project ./works/rainy-station --line L3f2a9c01 --json
-tts takes select --project ./works/rainy-station --line L3f2a9c01 --take 0002
 tts export --project ./works/rainy-station --format mp3 --layout role --concat --manifest --json
 ```
 
 要点：
 
-- `batch` 幂等：失败重跑只处理未完成项；相同参数命中缓存不重复请求。
-- `--events jsonl` 逐行输出事件（`started/progress/succeeded/cached/failed/finished`），适合长任务流式消费。
-- 批量存在失败项时退出码为 `3`（部分失败）——**这是可恢复状态**，修正后重跑即可。
+- 批量 **fail-fast**：存在未绑定音色的行 → `E_LINE_UNBOUND`（退出码 2），不会产生任何请求；先绑定再跑。
+- 部分失败 → 退出码 **3**（`E_PARTIAL`），`error.details.failed_lines` 给出每行错误码；修复后 `batch retry` + 重跑即可（或直接重跑 batch，失败行会自动重试、ok 行自动跳过）。
+- `--events jsonl` 需同时 `--json`：事件逐行输出，**最后一行是统一信封**。
 
 ### 3.2 音色设计 → 固化（保证跨句一致性）
 

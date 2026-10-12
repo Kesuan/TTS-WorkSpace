@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/role-bind.schema.json",
+  "title": "tts role bind --json 成功输出",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": ["project", "role", "voice", "style", "roles_total"],
+      "properties": {
+        "project": { "type": "string", "minLength": 1 },
+        "role": { "type": "string", "minLength": 1 },
+        "voice": { "type": ["string", "null"] },
+        "style": { "type": ["string", "null"] },
+        "roles_total": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

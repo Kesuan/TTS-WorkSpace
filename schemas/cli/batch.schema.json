@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tts-workspace.dev/schemas/cli/batch.schema.json",
+  "title": "tts batch --json 成功输出（全部成功；部分失败时为错误信封 + E_PARTIAL + 同结构 details）",
+  "type": "object",
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": { "const": true },
+    "data": {
+      "type": "object",
+      "required": ["project", "summary", "failed_lines"],
+      "properties": {
+        "project": { "type": "string", "minLength": 1 },
+        "summary": {
+          "type": "object",
+          "required": [
+            "total",
+            "succeeded",
+            "failed",
+            "skipped",
+            "cached",
+            "concurrency",
+            "total_duration_ms"
+          ],
+          "properties": {
+            "total": { "type": "integer", "minimum": 0 },
+            "succeeded": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 },
+            "skipped": { "type": "integer", "minimum": 0 },
+            "cached": { "type": "integer", "minimum": 0 },
+            "concurrency": { "type": "integer", "minimum": 1 },
+            "total_duration_ms": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "failed_lines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["line_id", "role", "code", "message"],
+            "properties": {
+              "line_id": { "type": "string", "minLength": 1 },
+              "role": { "type": "string", "minLength": 1 },
+              "code": { "type": "string", "pattern": "^E_[A-Z0-9_]+$" },
+              "message": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

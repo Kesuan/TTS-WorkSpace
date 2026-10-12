@@ -28,6 +28,10 @@ pub const E_CAPABILITY: &str = "E_CAPABILITY";
 pub const E_CONFIRM_REQUIRED: &str = "E_CONFIRM_REQUIRED";
 pub const E_DOCTOR_UNHEALTHY: &str = "E_DOCTOR_UNHEALTHY";
 pub const E_NOT_IMPLEMENTED: &str = "E_NOT_IMPLEMENTED";
+/// 行/角色未绑定音色（批量前置校验失败）。
+pub const E_LINE_UNBOUND: &str = "E_LINE_UNBOUND";
+/// 批量部分失败（退出码 3）。
+pub const E_PARTIAL: &str = "E_PARTIAL";
 
 /// 退出码契约：0 成功 · 1 运行时失败 · 2 用法/校验错误 · 3 部分失败 · 4 需要确认。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -5,6 +5,7 @@
 
 pub mod audio;
 pub mod audit;
+pub mod batch;
 pub mod cache;
 pub mod config;
 pub mod doctor;
@@ -17,6 +18,9 @@ pub mod script;
 pub mod synth;
 pub mod util;
 pub mod voices;
+
+#[cfg(test)]
+pub mod testing;
 
 /// 内核版本（与 workspace 版本一致）。
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

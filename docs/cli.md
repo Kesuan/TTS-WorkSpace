@@ -62,6 +62,8 @@
 | `E_FFMPEG_FAILED` | 1 | ffmpeg 执行失败 | 🚧 |
 | `E_NOT_FOUND` | 1 | 目标不存在（项目 / 行 / take / 音色 / 脚本） | ✅ |
 | `E_PARSE_SCRIPT` | 1 | 对白脚本解析失败（details 带 file/line/col） | ✅ |
+| `E_LINE_UNBOUND` | 2 | 批量前置校验：存在未绑定音色的行 | ✅ |
+| `E_PARTIAL` | 3 | 批量部分失败（details 带 summary 与 failed_lines） | ✅ |
 | `E_CAPABILITY` | 2 | 模型不支持该能力（如对设计模型使用 `--stream`） | ✅ |
 | `E_CONFIRM_REQUIRED` | 4 | 危险操作需要 `--yes` | 🚧 |
 | `E_DOCTOR_UNHEALTHY` | 1 | `doctor` 存在失败项（明细在 `details`） | ✅ |
@@ -229,6 +231,75 @@
 - **行模式**：take 写入 `takes/<line_id>/<NNNN>_<hash8>.wav`；首条自动设为 `selected_take`，行状态更新为 `ok`。`--out` 与 `--line` 互斥。
 - 行已被标记 `removed` → `E_USAGE`；行不存在 → `E_NOT_FOUND`。
 
+### `tts role bind`
+
+绑定角色 ↔ 音色与默认风格（项目级；批量生成时自动套用）。
+
+```bash
+tts role bind --role 阿岚 --voice 冰糖 --style "年轻的清亮女声，语速偏快" --project ./works/rainy-station
+```
+
+- 至少需要 `--voice` 或 `--style` 之一（否则 `E_USAGE`）。
+- Schema：[`role-bind`](../schemas/cli/role-bind.schema.json)
+
+### `tts line set`
+
+行级覆盖（音色 / 风格），写入 `lines.json` 的 `overrides`；优先级：行级覆盖 > 角色绑定。
+
+```bash
+tts line set --line L3f2a9c01 --style "(低语) 我没事，真的。" --project ./works/rainy-station
+tts line set --line L3f2a9c01 --clear-style                        # 清除行级风格
+```
+
+- 无任何修改参数 → `E_USAGE`；行不存在 → `E_NOT_FOUND`；removed 行 → `E_USAGE`。
+- Schema：[`line-set`](../schemas/cli/line-set.schema.json)
+
+### `tts batch`
+
+批量生成：并发限流、退避重试、幂等续跑、事件流。
+
+| 参数 | 说明 |
+| --- | --- |
+| `--project <目录>` | 项目目录（默认当前目录） |
+| `--line <ID>`（可重复） | 仅生成指定行；**显式指定即视为重新生成**（已完成行也会重跑） |
+| `--scene <名>` | 仅生成指定场景 |
+| `--concurrency <N>` | 并发数（默认取配置 `generation.concurrency`） |
+| `--model <ID>` | 模型 ID（默认配置 `models.tts`） |
+| `--force` | 忽略已完成状态，全部重新生成 |
+| `--no-cache` | 跳过缓存 |
+| `--events jsonl` | 事件流输出（需同时 `--json`；见下） |
+
+行为契约：
+
+- **默认目标**：状态非 `ok` 的非 removed 行；`ok` 行计入 `skipped`（不产生请求）。
+- **fail-fast**：任一目标行未绑定音色 → `E_LINE_UNBOUND`（退出码 2），**不生成任何内容**。
+- **重试**：`E_HTTP_NETWORK` / `E_HTTP_RATE_LIMIT` / 5xx 按指数退避重试（次数与基数见配置 `generation.retry`）。
+- **幂等**：已完成行跳过；相同参数命中缓存；失败行标记 `failed`，重跑时自动重试。
+- **部分失败**：全部完成后退出码 3（`E_PARTIAL`），`error.details` 为 `{project, summary, failed_lines}`。
+- 成功输出 Schema：[`batch`](../schemas/cli/batch.schema.json)
+
+`--events jsonl`：**逐行 JSON 输出事件，最后一行是统一信封**（因此需 `--json`）。事件类型：
+
+```jsonl
+{"event":"started","total":42,"concurrency":3,"skipped":2}
+{"event":"line_skipped","line_id":"L1111","role":"阿岚","reason":"already_ok"}
+{"event":"line_started","line_id":"L2222","role":"阿岚"}
+{"event":"line_succeeded","line_id":"L2222","role":"阿岚","take_id":"0001","duration_ms":1820,"latency_ms":880,"cached":false}
+{"event":"line_failed","line_id":"L3333","role":"小满","code":"E_HTTP_STATUS","message":"…","attempts":4}
+{"event":"finished","succeeded":40,"failed":1,"skipped":1,"cached":12,"total_duration_ms":52310}
+{"ok":true,"data":{"project":"…","summary":{…},"failed_lines":[]}}
+```
+
+### `tts batch status` / `tts batch retry`
+
+```bash
+tts batch status --project ./works/rainy-station --json   # 状态分布 + 失败行清单 + 未绑定角色
+tts batch retry  --project ./works/rainy-station --json   # 失败行重置为 pending（--line 可限定）
+```
+
+- `status` Schema：[`batch-status`](../schemas/cli/batch-status.schema.json)
+- `retry` Schema：[`batch-retry`](../schemas/cli/batch-retry.schema.json)；无失败条目时返回 `reset: 0`（成功）。
+
 ---
 
 ## 计划中命令（🚧 M1 / M2）
@@ -241,25 +312,9 @@
 | `tts design --prompt … --text … [--optimize-text-preview]` | 文本设计音色并试听 |
 | `tts design solidify --take <id> --name <名>` | 设计 → 克隆固化（保证跨句一致） |
 | `tts clone --sample <文件> --name <名>` | 创建克隆音色（≤10MB、wav/mp3、base64 data URL） |
-| `tts role bind --role <名> --voice <ref> [--style …]` | 角色 ↔ 音色绑定 |
-| `tts line set --line <id> [--style …] [--voice <ref>]` | 行级覆盖（写入 lines.json） |
 | `tts project rm` | 删除项目（需 `--yes`） |
-| `tts batch --all\|--scene <名> [--concurrency N] [--events jsonl]` | 批量生成（幂等；断点续跑；缓存去重） |
-| `tts batch status\|retry` | 批量状态 / 重试失败项 |
 | `tts takes list\|select --line <id>` | Take 列表与选用 |
 | `tts cast --line <id> --voices <a,b,c>` | 同句多音色对比（选角） |
 | `tts export [--format mp3] [--layout role\|scene\|flat] [--concat] [--manifest]` | 导出（逐行文件 / 分目录 / 整轨 / 清单） |
 | `tts usage [--since YYYY-MM]` | 用量统计（来自审计日志） |
 | `tts gc` | 清理未引用缓存与孤儿 take |
-
-### `--events jsonl` 事件流（🚧 M1）
-
-事件逐行输出（JSONL），供 Agent 实时消费：
-
-```jsonl
-{"event":"started","line_id":"L3f2a9c01","total":42}
-{"event":"succeeded","line_id":"L3f2a9c01","take_id":"0001","duration_ms":1820,"cached":false}
-{"event":"cached","line_id":"L5b1c0d22","take_id":"0002"}
-{"event":"failed","line_id":"L9e0f4a77","code":"E_HTTP_RATE_LIMIT","message":"…"}
-{"event":"finished","succeeded":40,"failed":2}
-```

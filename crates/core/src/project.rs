@@ -320,6 +320,57 @@ impl Project {
         })
     }
 
+    /// take 落盘：写音频文件 + 追加 TakeRef + 更新状态与选中项（首条自动选中）。
+    pub fn append_take(
+        &self,
+        lines: &mut LinesFile,
+        line_id: &str,
+        audio: &[u8],
+        cache_key: &str,
+        chars: usize,
+        duration_ms: u64,
+    ) -> Result<(PathBuf, String)> {
+        let dir = self.takes_dir().join(line_id);
+        fs::create_dir_all(&dir)
+            .map_err(|e| TtsError::runtime(E_IO, format!("无法创建目录 {}：{e}", dir.display())))?;
+        let sequence = lines
+            .find(line_id)
+            .map(|line| line.takes.len() + 1)
+            .unwrap_or(1);
+        let take_id = format!("{sequence:04}");
+        let short = &cache_key[..8.min(cache_key.len())];
+        let path = dir.join(format!("{take_id}_{short}.wav"));
+        fs::write(&path, audio).map_err(|e| {
+            TtsError::runtime(E_IO, format!("写入音频失败 {}：{e}", path.display()))
+        })?;
+        let relative = path
+            .strip_prefix(&self.root)
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|_| path.clone())
+            .display()
+            .to_string();
+
+        let entry = lines
+            .find_mut(line_id)
+            .ok_or_else(|| TtsError::runtime(E_NOT_FOUND, format!("未找到行：{line_id}")))?;
+        entry.takes.push(TakeRef {
+            take_id: take_id.clone(),
+            file: relative,
+            params_hash: short.to_string(),
+            cache_key: Some(cache_key.to_string()),
+            chars,
+            duration_ms,
+            created_at: now_rfc3339(),
+        });
+        if entry.status != STATUS_OK {
+            entry.status = STATUS_OK.to_string();
+        }
+        if entry.selected_take.is_none() {
+            entry.selected_take = Some(take_id.clone());
+        }
+        Ok((path, take_id))
+    }
+
     /// 解析脚本 → 稳定 ID → diff → 写回 `lines.json` 与 `project.json`。
     pub fn import_script(
         &mut self,

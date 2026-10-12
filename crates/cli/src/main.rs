@@ -7,26 +7,25 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand};
 use serde_json::{json, Value};
 
 use tts_core::audit::{self, AuditRecord};
+use tts_core::batch::{self, BatchEvent, BatchOptions};
 use tts_core::cache::Cache;
 use tts_core::config::{mask_secret, Config, ENV_API_KEY};
 use tts_core::doctor::{self, CheckStatus};
 use tts_core::error::{
-    success_envelope, Result, TtsError, E_DOCTOR_UNHEALTHY, E_IO, E_NOT_FOUND, E_USAGE,
+    success_envelope, Result, TtsError, E_DOCTOR_UNHEALTHY, E_IO, E_NOT_FOUND, E_PARTIAL, E_USAGE,
 };
 use tts_core::mimo::MimoClient;
 use tts_core::paths::Paths;
-use tts_core::project::{
-    Project, TakeRef, STATUS_FAILED, STATUS_OK, STATUS_PENDING, STATUS_REMOVED,
-};
+use tts_core::project::{Project, STATUS_FAILED, STATUS_OK, STATUS_PENDING, STATUS_REMOVED};
 use tts_core::provider::AudioFormat;
 use tts_core::script::ParseOptions;
-use tts_core::synth::{self, SynthOptions, SynthOutcome};
-use tts_core::util::now_rfc3339;
+use tts_core::synth::{self, SynthOptions};
 use tts_core::voices::parse_voice_ref;
 
 #[derive(Parser, Debug)]
@@ -66,6 +65,12 @@ enum Command {
     Config(ConfigArgs),
     /// 项目（= 作品）管理：初始化 / 导入对白 / 状态
     Project(ProjectArgs),
+    /// 角色 ↔ 音色绑定
+    Role(RoleArgs),
+    /// 行级覆盖（音色 / 风格）
+    Line(LineArgs),
+    /// 批量生成（并发 / 重试 / 幂等续跑 / 事件流）
+    Batch(BatchArgs),
     /// 合成单条语音（缓存去重；可联动项目行写入 take）
     Synth(SynthArgs),
     /// 打印版本信息
@@ -145,6 +150,109 @@ enum ProjectCmd {
         /// 项目目录
         #[arg(long, default_value = ".")]
         project: PathBuf,
+    },
+}
+
+#[derive(Args, Debug)]
+struct RoleArgs {
+    #[command(subcommand)]
+    cmd: RoleCmd,
+}
+
+#[derive(Subcommand, Debug)]
+enum RoleCmd {
+    /// 绑定角色 ↔ 音色 / 默认风格
+    Bind {
+        /// 角色名（与脚本中的角色名一致）
+        #[arg(long)]
+        role: String,
+        /// 音色引用（预置名 / design:<描述> / clone:<音频文件>）
+        #[arg(long)]
+        voice: Option<String>,
+        /// 角色默认风格指令
+        #[arg(long)]
+        style: Option<String>,
+        /// 项目目录
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+    },
+}
+
+#[derive(Args, Debug)]
+struct LineArgs {
+    #[command(subcommand)]
+    cmd: LineCmd,
+}
+
+#[derive(Subcommand, Debug)]
+enum LineCmd {
+    /// 设置行级覆盖（音色 / 风格）
+    Set {
+        /// 行 ID
+        #[arg(long)]
+        line: String,
+        /// 行级音色覆盖
+        #[arg(long)]
+        voice: Option<String>,
+        /// 行级风格覆盖
+        #[arg(long)]
+        style: Option<String>,
+        /// 清除行级音色覆盖
+        #[arg(long)]
+        clear_voice: bool,
+        /// 清除行级风格覆盖
+        #[arg(long)]
+        clear_style: bool,
+        /// 项目目录
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+    },
+}
+
+#[derive(Args, Debug)]
+struct BatchArgs {
+    #[command(subcommand)]
+    cmd: Option<BatchCmd>,
+    /// 项目目录
+    #[arg(long, default_value = ".")]
+    project: PathBuf,
+    /// 仅生成指定行（可重复；显式指定即视为重新生成）
+    #[arg(long = "line")]
+    line: Vec<String>,
+    /// 仅生成指定场景
+    #[arg(long)]
+    scene: Option<String>,
+    /// 并发数（默认取配置 generation.concurrency）
+    #[arg(long)]
+    concurrency: Option<usize>,
+    /// 模型 ID（默认取配置 models.tts）
+    #[arg(long)]
+    model: Option<String>,
+    /// 忽略已完成状态，全部重新生成
+    #[arg(long)]
+    force: bool,
+    /// 跳过缓存
+    #[arg(long)]
+    no_cache: bool,
+    /// 事件流格式（仅支持 jsonl；需同时使用 --json）
+    #[arg(long)]
+    events: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum BatchCmd {
+    /// 批量状态：状态分布与失败行清单
+    Status {
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+    },
+    /// 将失败行重置为 pending（便于重跑）
+    Retry {
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+        /// 仅重置指定行（可重复）
+        #[arg(long = "line")]
+        line: Vec<String>,
     },
 }
 
@@ -241,6 +349,9 @@ async fn execute(cli: &Cli) -> Result<CmdOutput> {
         Command::Doctor(args) => cmd_doctor(args).await,
         Command::Config(args) => cmd_config(args),
         Command::Project(args) => cmd_project(args),
+        Command::Role(args) => cmd_role(args),
+        Command::Line(args) => cmd_line(args),
+        Command::Batch(args) => cmd_batch(cli, args).await,
         Command::Synth(args) => cmd_synth(args).await,
         Command::Version => cmd_version(),
     }
@@ -558,7 +669,16 @@ async fn cmd_synth(args: &SynthArgs) -> Result<CmdOutput> {
     let (output_path, take_id) = match args.line.as_ref() {
         Some(line_id) => {
             let project = project.as_ref().expect("--line 时项目必然存在");
-            let (path, take_id) = write_take(project, line_id, &outcome)?;
+            let mut lines = project.load_lines()?;
+            let (path, take_id) = project.append_take(
+                &mut lines,
+                line_id,
+                &outcome.audio,
+                &outcome.cache_key,
+                outcome.chars,
+                outcome.duration_ms,
+            )?;
+            project.save_lines(&lines)?;
             (path, Some(take_id))
         }
         None => {
@@ -621,53 +741,360 @@ async fn cmd_synth(args: &SynthArgs) -> Result<CmdOutput> {
     Ok(CmdOutput { data, human })
 }
 
-/// 项目 take 落盘：写音频文件 + 追加 TakeRef + 更新状态与选中项。
-fn write_take(
-    project: &Project,
-    line_id: &str,
-    outcome: &SynthOutcome,
-) -> Result<(PathBuf, String)> {
-    let dir = project.takes_dir().join(line_id);
-    fs::create_dir_all(&dir)
-        .map_err(|e| TtsError::runtime(E_IO, format!("无法创建目录 {}：{e}", dir.display())))?;
-
-    let mut lines = project.load_lines()?;
-    let sequence = lines
-        .find(line_id)
-        .map(|line| line.takes.len() + 1)
-        .unwrap_or(1);
-    let take_id = format!("{sequence:04}");
-    let short = &outcome.cache_key[..8.min(outcome.cache_key.len())];
-    let path = dir.join(format!("{take_id}_{short}.wav"));
-    fs::write(&path, &outcome.audio)
-        .map_err(|e| TtsError::runtime(E_IO, format!("写入音频失败 {}：{e}", path.display())))?;
-    let relative = path
-        .strip_prefix(&project.root)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|_| path.clone())
-        .display()
-        .to_string();
-
-    let entry = lines
-        .find_mut(line_id)
-        .ok_or_else(|| TtsError::runtime(E_NOT_FOUND, format!("未找到行：{line_id}")))?;
-    entry.takes.push(TakeRef {
-        take_id: take_id.clone(),
-        file: relative,
-        params_hash: short.to_string(),
-        cache_key: Some(outcome.cache_key.clone()),
-        chars: outcome.chars,
-        duration_ms: outcome.duration_ms,
-        created_at: now_rfc3339(),
-    });
-    if entry.status != STATUS_OK {
-        entry.status = STATUS_OK.to_string();
+fn cmd_role(args: &RoleArgs) -> Result<CmdOutput> {
+    match &args.cmd {
+        RoleCmd::Bind {
+            role,
+            voice,
+            style,
+            project: project_dir,
+        } => {
+            if voice.is_none() && style.is_none() {
+                return Err(TtsError::usage(E_USAGE, "至少需要 --voice 或 --style 之一"));
+            }
+            let role_name = role.trim().to_string();
+            if role_name.is_empty() {
+                return Err(TtsError::usage(E_USAGE, "角色名不能为空"));
+            }
+            let mut project = Project::open(project_dir)?;
+            project.bind_role(&role_name, voice.clone(), style.clone())?;
+            let binding = project
+                .meta
+                .roles
+                .get(&role_name)
+                .cloned()
+                .unwrap_or_default();
+            let data = json!({
+                "project": project.root.display().to_string(),
+                "role": role_name,
+                "voice": binding.voice,
+                "style": binding.style,
+                "roles_total": project.meta.roles.len(),
+            });
+            let human = format!(
+                "已绑定角色「{}」：音色 {} / 风格 {}",
+                role_name,
+                binding.voice.unwrap_or_else(|| "（未设置）".to_string()),
+                binding.style.unwrap_or_else(|| "（未设置）".to_string()),
+            );
+            Ok(CmdOutput { data, human })
+        }
     }
-    if entry.selected_take.is_none() {
-        entry.selected_take = Some(take_id.clone());
+}
+
+fn cmd_line(args: &LineArgs) -> Result<CmdOutput> {
+    match &args.cmd {
+        LineCmd::Set {
+            line,
+            voice,
+            style,
+            clear_voice,
+            clear_style,
+            project: project_dir,
+        } => {
+            if voice.is_none() && style.is_none() && !clear_voice && !clear_style {
+                return Err(TtsError::usage(E_USAGE, "未指定任何修改")
+                    .with_hint("可用 --voice / --style / --clear-voice / --clear-style"));
+            }
+            let project = Project::open(project_dir)?;
+            let mut lines = project.load_lines()?;
+            {
+                let entry = lines.find_mut(line).ok_or_else(|| {
+                    TtsError::runtime(E_NOT_FOUND, format!("未找到行：{line}"))
+                        .with_hint("用 `tts project status` 查看有效行 ID")
+                })?;
+                if entry.status == STATUS_REMOVED {
+                    return Err(TtsError::usage(
+                        E_USAGE,
+                        format!("行已被标记 removed：{line}"),
+                    ));
+                }
+                if *clear_voice {
+                    entry.overrides.voice = None;
+                }
+                if *clear_style {
+                    entry.overrides.style = None;
+                }
+                if let Some(value) = voice {
+                    entry.overrides.voice = Some(value.clone());
+                }
+                if let Some(value) = style {
+                    entry.overrides.style = Some(value.clone());
+                }
+            }
+            let entry = lines
+                .find(line)
+                .cloned()
+                .ok_or_else(|| TtsError::runtime(E_NOT_FOUND, format!("未找到行：{line}")))?;
+            project.save_lines(&lines)?;
+            let data = json!({
+                "project": project.root.display().to_string(),
+                "line_id": line,
+                "overrides": { "voice": entry.overrides.voice, "style": entry.overrides.style },
+                "status": entry.status,
+            });
+            let human = format!(
+                "已更新行 {line}：音色 {} / 风格 {}",
+                entry
+                    .overrides
+                    .voice
+                    .unwrap_or_else(|| "（未覆盖）".to_string()),
+                entry
+                    .overrides
+                    .style
+                    .unwrap_or_else(|| "（未覆盖）".to_string()),
+            );
+            Ok(CmdOutput { data, human })
+        }
+    }
+}
+
+async fn cmd_batch(cli: &Cli, args: &BatchArgs) -> Result<CmdOutput> {
+    if let Some(command) = &args.cmd {
+        return match command {
+            BatchCmd::Status { project } => batch_status(project),
+            BatchCmd::Retry { project, line } => batch_retry(project, line),
+        };
+    }
+
+    let events_jsonl = match args.events.as_deref() {
+        None => false,
+        Some("jsonl") => true,
+        Some(other) => {
+            return Err(
+                TtsError::usage(E_USAGE, format!("不支持的事件格式：{other}"))
+                    .with_hint("仅支持 --events jsonl"),
+            )
+        }
+    };
+    if events_jsonl && !cli.json {
+        return Err(
+            TtsError::usage(E_USAGE, "--events jsonl 需要同时使用 --json")
+                .with_hint("事件流与最终信封都走 stdout（逐行 JSON，最后一行是统一信封）"),
+        );
+    }
+
+    let paths = Paths::resolve()?;
+    let config = Config::load(&paths.config_file)?;
+    paths.ensure_layout()?;
+
+    let options = BatchOptions {
+        concurrency: args
+            .concurrency
+            .unwrap_or(config.generation.concurrency as usize),
+        retry_max: config.generation.retry.max,
+        backoff_ms: config.generation.retry.backoff_ms,
+        model: args
+            .model
+            .clone()
+            .unwrap_or_else(|| config.models.tts.clone()),
+        use_cache: !args.no_cache,
+        force: args.force,
+        scene: args.scene.clone(),
+        line_ids: args.line.clone(),
+    };
+    if options.concurrency == 0 {
+        return Err(TtsError::usage(E_USAGE, "--concurrency 至少为 1"));
+    }
+
+    let project = Project::open(&args.project)?;
+    let client = Arc::new(MimoClient::from_config(&config)?);
+    let cache = Cache::new(paths.cache_dir());
+    let quiet = cli.quiet;
+    let sink = move |event: BatchEvent| {
+        if events_jsonl {
+            println!("{}", serde_json::to_string(&event).unwrap_or_default());
+        } else if !quiet {
+            eprintln!("{}", render_batch_event(&event));
+        }
+    };
+
+    let outcome = batch::run(
+        client,
+        cache,
+        &project.root,
+        &paths.audit_file(),
+        &options,
+        &sink,
+    )
+    .await?;
+
+    let data = json!({
+        "project": project.root.display().to_string(),
+        "summary": outcome.summary,
+        "failed_lines": outcome.failed_lines,
+    });
+
+    if outcome.summary.failed > 0 {
+        return Err(TtsError::partial(
+            E_PARTIAL,
+            format!(
+                "批量完成：{} 成功 / {} 失败 / {} 跳过",
+                outcome.summary.succeeded, outcome.summary.failed, outcome.summary.skipped
+            ),
+        )
+        .with_hint("用 `tts batch status` 查看失败行；修复后 `tts batch retry` 重置再重跑")
+        .with_details(data));
+    }
+
+    let summary = &outcome.summary;
+    let human = format!(
+        "批量完成：成功 {} / 失败 {} / 跳过 {}（缓存 {}），耗时 {:.1}s",
+        summary.succeeded,
+        summary.failed,
+        summary.skipped,
+        summary.cached,
+        summary.total_duration_ms as f64 / 1000.0
+    );
+    Ok(CmdOutput { data, human })
+}
+
+fn batch_status(project_dir: &Path) -> Result<CmdOutput> {
+    let project = Project::open(project_dir)?;
+    let lines = project.load_lines()?;
+    let count = |status: &str| {
+        lines
+            .lines
+            .iter()
+            .filter(|line| line.status == status)
+            .count()
+    };
+    let counts = json!({
+        "total": lines.lines.len(),
+        "pending": count(STATUS_PENDING),
+        "ok": count(STATUS_OK),
+        "failed": count(STATUS_FAILED),
+        "removed": count(STATUS_REMOVED),
+    });
+    let failed_lines: Vec<Value> = lines
+        .lines
+        .iter()
+        .filter(|line| line.status == STATUS_FAILED)
+        .map(|line| {
+            json!({
+                "line_id": line.id,
+                "role": line.role,
+                "index": line.index,
+                "scene": line.scene,
+                "text": line.text,
+            })
+        })
+        .collect();
+
+    let mut unbound: Vec<String> = Vec::new();
+    for line in &lines.lines {
+        if line.status == STATUS_REMOVED {
+            continue;
+        }
+        if project.resolve_voice(line).is_none() && !unbound.iter().any(|role| role == &line.role) {
+            unbound.push(line.role.clone());
+        }
+    }
+
+    let data = json!({
+        "project": project.root.display().to_string(),
+        "name": project.meta.name,
+        "counts": counts,
+        "failed_lines": failed_lines,
+        "unbound_roles": unbound,
+    });
+    let human = format!(
+        "项目「{}」：pending {} / ok {} / failed {} / removed {}（失败 {} 行，未绑定角色 {} 个）",
+        project.meta.name,
+        data["counts"]["pending"],
+        data["counts"]["ok"],
+        data["counts"]["failed"],
+        data["counts"]["removed"],
+        failed_lines.len(),
+        unbound.len(),
+    );
+    Ok(CmdOutput { data, human })
+}
+
+fn batch_retry(project_dir: &Path, only: &[String]) -> Result<CmdOutput> {
+    let project = Project::open(project_dir)?;
+    let mut lines = project.load_lines()?;
+
+    if !only.is_empty() {
+        let missing: Vec<String> = only
+            .iter()
+            .filter(|id| lines.find(id).is_none())
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            return Err(TtsError::runtime(
+                E_NOT_FOUND,
+                format!("以下行不存在：{}", missing.join(", ")),
+            ));
+        }
+    }
+
+    let mut reset: Vec<String> = Vec::new();
+    for line in lines.lines.iter_mut() {
+        if line.status != STATUS_FAILED {
+            continue;
+        }
+        if !only.is_empty() && !only.iter().any(|id| id == &line.id) {
+            continue;
+        }
+        line.status = STATUS_PENDING.to_string();
+        reset.push(line.id.clone());
     }
     project.save_lines(&lines)?;
-    Ok((path, take_id))
+
+    let data = json!({
+        "project": project.root.display().to_string(),
+        "reset": reset.len(),
+        "line_ids": reset,
+    });
+    let human = if reset.is_empty() {
+        "没有需要重置的失败条目".to_string()
+    } else {
+        format!("已重置 {} 条失败条目为 pending", reset.len())
+    };
+    Ok(CmdOutput { data, human })
+}
+
+fn render_batch_event(event: &BatchEvent) -> String {
+    match event {
+        BatchEvent::Started {
+            total,
+            concurrency,
+            skipped,
+        } => format!("开始批量：{total} 条（并发 {concurrency}，跳过 {skipped}）"),
+        BatchEvent::LineStarted { line_id, role } => format!("· {line_id} [{role}] 生成中…"),
+        BatchEvent::LineSkipped {
+            line_id, reason, ..
+        } => format!("· {line_id} 跳过（{reason}）"),
+        BatchEvent::LineSucceeded {
+            line_id,
+            take_id,
+            duration_ms,
+            cached,
+            ..
+        } => format!(
+            "✓ {line_id} → take {take_id}（{:.1}s{}）",
+            *duration_ms as f64 / 1000.0,
+            if *cached { "，缓存" } else { "" }
+        ),
+        BatchEvent::LineFailed {
+            line_id,
+            code,
+            message,
+            attempts,
+            ..
+        } => format!("✗ {line_id} 失败（{code}，尝试 {attempts} 次）：{message}"),
+        BatchEvent::Finished {
+            succeeded,
+            failed,
+            skipped,
+            cached,
+            total_duration_ms,
+        } => format!(
+            "完成：成功 {succeeded} / 失败 {failed} / 跳过 {skipped}（缓存 {cached}），耗时 {:.1}s",
+            *total_duration_ms as f64 / 1000.0
+        ),
+    }
 }
 
 fn is_secret_key(key: &str) -> bool {

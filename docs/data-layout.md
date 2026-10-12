@@ -80,10 +80,10 @@
 
 ## 审计日志 ✅
 
-`audit/audit.jsonl`，每行一条，append-only（`tts synth` 成功与失败都会写入；后续 batch / export 同样）：
+`audit/audit.jsonl`，每行一条，append-only（`tts synth` / `tts batch` 成功与失败都会写入；后续 export 同样）：
 
 ```json
-{"ts":"2026-10-12T09:00:00Z","cmd":"synth","project":"/…/rainy-station","line_id":"L3f2a9c01","model":"mimo-v2.5-tts","voice":"冰糖","chars":37,"duration_ms":1820,"latency_ms":880,"cached":false,"status":"ok","cost_note":"tts:free"}
+{"ts":"2026-10-12T09:00:00Z","cmd":"batch","project":"/…/rainy-station","line_id":"L3f2a9c01","model":"mimo-v2.5-tts","voice":"冰糖","chars":37,"duration_ms":1820,"latency_ms":880,"cached":false,"status":"ok","cost_note":"tts:free"}
 ```
 
 `tts usage`（🚧）由该文件聚合（请求数 / 字符数 / 缓存命中率 / 音频时长），为将来计费做准备。

@@ -126,78 +126,7 @@ pub async fn synthesize(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use crate::audio::pcm16_to_wav;
-    use crate::error::Result;
-    use crate::provider::{Capabilities, SynthResult};
-
-    struct FakeProvider {
-        plain_calls: AtomicUsize,
-        stream_calls: AtomicUsize,
-        wav: Vec<u8>,
-    }
-
-    impl FakeProvider {
-        fn new() -> Self {
-            Self {
-                plain_calls: AtomicUsize::new(0),
-                stream_calls: AtomicUsize::new(0),
-                wav: pcm16_to_wav(&vec![0u8; 4_800], 24_000).unwrap(),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl TtsProvider for FakeProvider {
-        fn name(&self) -> &'static str {
-            "fake"
-        }
-
-        fn capabilities(&self, _model: &str) -> Capabilities {
-            Capabilities {
-                streaming: true,
-                preset_voices: true,
-                voice_design: true,
-                voice_clone: true,
-            }
-        }
-
-        async fn list_models(&self) -> Result<Vec<String>> {
-            Ok(vec!["fake-tts".to_string()])
-        }
-
-        async fn synthesize(&self, _request: &SynthRequest) -> Result<SynthResult> {
-            self.plain_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(SynthResult {
-                audio: self.wav.clone(),
-                format: AudioFormat::Wav,
-                sample_rate: 24_000,
-                duration_ms: 100,
-                latency_ms: 7,
-                model: "fake-tts".to_string(),
-                cache_key: None,
-            })
-        }
-
-        async fn synthesize_stream(
-            &self,
-            _request: &SynthRequest,
-            _on_chunk: crate::mimo::client::ChunkSink<'_>,
-        ) -> Result<SynthResult> {
-            self.stream_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(SynthResult {
-                audio: self.wav.clone(),
-                format: AudioFormat::Wav,
-                sample_rate: 24_000,
-                duration_ms: 100,
-                latency_ms: 3,
-                model: "fake-tts".to_string(),
-                cache_key: None,
-            })
-        }
-    }
+    use crate::testing::FakeProvider;
 
     fn options(text: &str) -> SynthOptions {
         SynthOptions {
@@ -223,18 +152,14 @@ mod tests {
             .await
             .unwrap();
         assert!(!first.cached);
-        assert_eq!(provider.plain_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.plain_calls(), 1);
         assert_eq!(first.duration_ms, 100);
 
         let second = synthesize(&provider, &cache, &options("早上好"))
             .await
             .unwrap();
         assert!(second.cached);
-        assert_eq!(
-            provider.plain_calls.load(Ordering::SeqCst),
-            1,
-            "不应重复请求"
-        );
+        assert_eq!(provider.plain_calls(), 1, "不应重复请求");
         assert_eq!(second.audio, first.audio);
         assert_eq!(second.cache_key, first.cache_key);
     }
@@ -252,7 +177,7 @@ mod tests {
         forced.use_cache = false;
         let result = synthesize(&provider, &cache, &forced).await.unwrap();
         assert!(!result.cached);
-        assert_eq!(provider.plain_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(provider.plain_calls(), 2);
     }
 
     #[tokio::test]
@@ -264,8 +189,8 @@ mod tests {
         let mut streamed = options("流式");
         streamed.stream = true;
         let result = synthesize(&provider, &cache, &streamed).await.unwrap();
-        assert_eq!(provider.stream_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(provider.plain_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(provider.stream_calls(), 1);
+        assert_eq!(provider.plain_calls(), 0);
         assert_ne!(result.cache_key, request_cache_key(&options("流式")));
     }
 
