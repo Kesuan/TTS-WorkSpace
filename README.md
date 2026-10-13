@@ -24,9 +24,12 @@ brew install ffmpeg
 ## 构建与上手
 
 ```bash
-cargo build --workspace                 # 构建
+cargo build --workspace                 # 构建（debug）
 cargo run -p tts-cli -- doctor          # 环境自检（工作区/配置/Key/ffmpeg/网络）
-cargo install --path crates/cli         # 安装 `tts` 到 PATH（可选）
+
+# 安装 CLI（release 二进制 → ~/.cargo/bin/tts）
+cargo install --path crates/cli
+# 或只构建：cargo build --release -p tts-cli   → target/release/tts
 ```
 
 首次配置 API Key（也可使用环境变量 `MIMO_API_KEY`）：
@@ -81,9 +84,13 @@ M1 + M2 已全部可用；下一步 M3：Tauri + React + animal-island-ui 桌面
 ## 桌面 GUI
 
 ```bash
-tools/gui            # 安装依赖 + 构建前端 + 启动应用（dev）
-tools/gui --build    # 仅构建前端并编译桌面应用
+tools/gui            # 开发模式：Vite 热更新 + 运行应用
+tools/gui --run      # 独立运行：内嵌前端（不需要 Vite）
+tools/gui --build    # 打包：TTS WorkSpace.app（release、内嵌前端）
 ```
+
+打包产物：`target/release/bundle/macos/TTS WorkSpace.app`（拖入 `/Applications` 即用；**未签名**，
+拷到其他 Mac 需右键打开或自行签名/公证）。
 
 四个页面：**项目**（导入剧本 / 角色绑定 / 逐行重生成 / take 试听与选用 / 批量进度 / 导出）、**音色库**（设计 / 克隆 / 固化 / 删除）、**用量**（统计 + 缓存清理）、**设置**（Key / 模型 / 并发重试 / ffmpeg / doctor）。
 详见 [docs/gui.md](docs/gui.md)。
@@ -127,7 +134,7 @@ tools/gui      # 启动桌面应用（dev）
 | M1 | CLI 端到端：合成 / 项目 / 对白解析 / 批量队列 / Take / 导出 / 用量 | ✅ 完成 |
 | M2 | 音色库：音色设计、克隆、设计→克隆固化、库内音色全流程可用 | ✅ 完成 |
 | M3 | GUI：Tauri 2 + React + animal-island-ui（试听 / 对比 / 批量监控） | ✅ 完成 |
-| M4 | 候选：ASR 校验、MCP Server、打包分发、多 Provider | 候选 |
+| M4 | 候选：ASR 校验、MCP Server、Windows/Linux 打包、签名与公证、多 Provider | 候选 |
 
 ## 免责声明
 

@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# TTS-WorkSpace 桌面应用启动脚本
+# TTS-WorkSpace 桌面应用：开发模式 / 独立运行 / 打包（macOS .app）
 #
 # 用法：
-#   tools/gui            # 安装前端依赖（如缺失）并启动开发模式（vite + tauri）
-#   tools/gui --build    # 构建前端并编译桌面应用（不打包安装包）
-#
-# 说明：开发模式下 Tauri 会启动 Vite（http://localhost:5173）并打开应用窗口。
+#   tools/gui             # 开发模式：Vite 热更新 + cargo run（改前端即时生效）
+#   tools/gui --run       # 独立运行：内嵌前端构建（custom-protocol），不依赖 Vite
+#   tools/gui --build     # 打包：构建前端 + tauri build → TTS WorkSpace.app
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 2
 
 MODE="dev"
-if [[ "${1:-}" == "--build" ]]; then
-  MODE="build"
-elif [[ -n "${1:-}" ]]; then
-  echo "未知参数：$1（支持 --build）" >&2
-  exit 2
-fi
+case "${1:-}" in
+  "")        MODE="dev" ;;
+  --run)     MODE="run" ;;
+  --build)   MODE="build" ;;
+  -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+  *) echo "未知参数：$1（支持 --run / --build）" >&2; exit 2 ;;
+esac
 
 if ! command -v cargo >/dev/null 2>&1; then
   echo "错误：未找到 cargo（需要 Rust 工具链，见 README）" >&2
@@ -27,22 +27,45 @@ if ! command -v npm >/dev/null 2>&1; then
   echo "错误：未找到 npm（需要 Node.js 18+）" >&2
   exit 2
 fi
-
 if [[ ! -d ui/node_modules ]]; then
   echo "==> 安装前端依赖（ui/）"
   (cd ui && npm install) || exit 1
 fi
 
-if [[ "$MODE" == "build" ]]; then
-  echo "==> 构建前端"
-  (cd ui && npm run build) || exit 1
-  echo "==> 编译桌面应用（debug）"
-  cargo build -p tts-desktop || exit 1
-  echo "==> 完成：target/debug/tts-desktop"
-  exit 0
-fi
+wait_for_vite() {
+  for _ in $(seq 1 60); do
+    if curl -sf -o /dev/null http://localhost:5173/ 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "错误：Vite 未在预期时间内启动" >&2
+  return 1
+}
 
-echo "==> 启动开发模式（Ctrl+C 退出）"
-echo "    提示：脚本会先构建一次前端再启动，避免 Tauri 等待打包产物"
-(cd ui && npm run build) || exit 1
-exec cargo run -p tts-desktop
+case "$MODE" in
+  dev)
+    echo "==> 启动 Vite 开发服务器（热更新）"
+    (cd ui && npm run dev) &
+    VITE_PID=$!
+    trap 'kill "$VITE_PID" 2>/dev/null; wait "$VITE_PID" 2>/dev/null' EXIT INT TERM
+    wait_for_vite || exit 1
+    echo "==> 启动桌面应用（dev 模式：读取 http://localhost:5173）"
+    cargo run -p tts-desktop
+    ;;
+  run)
+    echo "==> 构建前端并内嵌（独立运行，不需要 Vite）"
+    (cd ui && npm run build) || exit 1
+    cargo run -p tts-desktop --features custom-protocol
+    ;;
+  build)
+    echo "==> 构建前端"
+    (cd ui && npm run build) || exit 1
+    echo "==> tauri build（macOS .app，内嵌前端）"
+    (cd crates/desktop && "$ROOT/ui/node_modules/.bin/tauri" build) || exit 1
+    echo
+    echo "==> 产物："
+    ls -d target/release/bundle/macos/*.app 2>/dev/null || true
+    echo "    未签名（本地可直接双击；拷到其他 Mac 需右键打开或自行签名/公证）"
+    ;;
+esac

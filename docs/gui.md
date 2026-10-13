@@ -3,15 +3,20 @@
 Tauri 2 + React 18.3 + TypeScript + [animal-island-ui](https://github.com/guokaigdg/animal-island-ui) 的本地桌面应用：
 **人工预览与调优台**，与 CLI 共用同一内核（`tts-core`）与同一数据目录（`~/.tts-workbench`，可用 `TTS_WORKSPACE_ROOT` 覆盖）。
 
-## 启动
+## 启动与打包
 
-```bash
-tools/gui              # 安装依赖 + 构建前端 + 启动应用（dev）
-tools/gui --build      # 仅构建前端并编译（产物：target/debug/tts-desktop）
-cargo run -p tts-desktop   # 已构建过前端时的快捷启动
-```
+| 命令 | 说明 |
+| --- | --- |
+| `tools/gui` | **开发模式**：自动启动 Vite（热更新）+ 运行应用；改前端即时生效 |
+| `tools/gui --run` | **独立运行**：内嵌前端（`custom-protocol`）构建后运行，不依赖 Vite |
+| `tools/gui --build` | **打包**：构建前端 + `tauri build` → `TTS WorkSpace.app`（release、内嵌前端） |
 
-前置：Rust 工具链、Node.js 18+、ffmpeg 9（导出 mp3 / 拼接 / 归一化时需要）。
+打包产物：`target/release/bundle/macos/TTS WorkSpace.app`（可直接拖入 `/Applications`）。
+
+- 应用**未签名**：本机双击可用；拷到其他 Mac 会被 Gatekeeper 拦截（右键「打开」放行，或自行签名/公证）。
+- 图标：`crates/desktop/icons/icon.png`（1024 源）→ `icon.icns`（由 `iconutil` 生成，脚本见提交记录）。
+- dev / 独立运行的区别来自 `crates/desktop/Cargo.toml` 的 `custom-protocol` feature：
+  未启用 = 读 `devUrl`（需 Vite）；启用 = 内嵌 `ui/dist`。
 
 ## 页面
 
@@ -59,4 +64,6 @@ crates/desktop/           # Tauri 2 壳
   `{"allow": ["**"], "requireLiteralLeadingDot": false}`（见 `crates/desktop/tauri.conf.json`）。
 - **窗口白屏**：dev 模式需要 Vite（`tools/gui` 会先构建再启动）。只想快速体验可
   `tools/gui --build` 后运行 `target/debug/tts-desktop`。
-- **改了 Rust 命令层没生效**：重启应用（`Ctrl+C` 后重跑 `tools/gui`）；前端改动由 Vite 热更新。
+- **改了 Rust 命令层没生效**：重启应用；前端改动由 Vite 热更新（`tools/gui`）。
+- **打包后双击没反应**：确认用的是 `target/release/bundle/macos/*.app`（`tools/gui --build` 产出），
+  而不是 `target/debug/tts-desktop`（debug 构建默认走 devUrl，需要 Vite 才不白屏）。

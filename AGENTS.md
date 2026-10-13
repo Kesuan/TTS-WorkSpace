@@ -11,6 +11,8 @@
 | `tools/test --filter <子串>` | 仅运行匹配的测试 |
 | `tools/test --min-tests <N>` | 用例数下限（防假绿；退出码 3 = 未达标） |
 | `tools/lint` | `cargo fmt --check` + `clippy -D warnings`（+ 前端 lint） |
+| `tools/gui` | 桌面应用：开发模式（Vite + 热更新） |
+| `tools/gui --run` / `--build` | 独立运行（内嵌前端）/ 打包 `.app` |
 | `cargo run -p tts-cli -- <子命令>` | 本地运行 CLI |
 
 `tools/test` 退出码：0 通过 · 1 测试失败 · 2 工具链缺失等内部错误 · 3 未发现测试/低于下限。
@@ -21,9 +23,12 @@
 - `crates/cli/`：`tts` 二进制。只做参数解析、调用 core、按契约输出；不放业务逻辑。
 - `schemas/`：JSON Schema 即对外契约；CLI 输出结构变更必须同步 schema、`docs/cli.md` 与测试。
 - `crates/cli/tests/`：CLI 契约测试（stdin/stdout/退出码/schema）。仓库根 `tests/fixtures/`：共享夹具（回放数据，必须脱敏）。
-- `ui/`（M3）：React 18.3 + TypeScript + Vite + **animal-island-ui**。
+- `ui/`：React 18.3 + TypeScript + Vite + **animal-island-ui**。
   - 必须 `import 'animal-island-ui/style'`；不要引入 Tailwind（与岛屿设计语言冲突）。
   - 页面生成前安装风格 skill：`skills add guokaigdg/animal-island-ui`，并对照其 `docs/design-system/`。
+- `crates/desktop/`：Tauri 2 壳；命令层只调用 core，错误对象与 CLI 同构。
+  - `custom-protocol` feature：**不启用** = dev（读 devUrl，需要 Vite）；**启用** = 内嵌 `ui/dist`。
+  - 改动 IPC 命令后需同步 `ui/src/api.ts` 与 `ui/src/types.ts`；打包用 `tools/gui --build`。
 
 ## 硬性规则
 

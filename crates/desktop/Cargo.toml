@@ -10,6 +10,10 @@ repository.workspace = true
 name = "tts_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# 生产/独立运行：内嵌 ui/dist（关闭后 debug 构建走 devUrl，配合 Vite 开发）
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

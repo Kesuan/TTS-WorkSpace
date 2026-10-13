@@ -2,10 +2,8 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TTS WorkSpace",
   "version": "0.1.0",
-  "identifier": "dev.ttsworkspace.app",
+  "identifier": "dev.ttsworkspace.desktop",
   "build": {
-    "beforeDevCommand": "npm --prefix ../../ui run dev",
-    "beforeBuildCommand": "npm --prefix ../../ui run build",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../../ui/dist"
   },
@@ -31,8 +29,14 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all",
-    "icon": []
+    "active": true,
+    "targets": ["app"],
+    "icon": ["icons/icon.icns", "icons/icon.png"],
+    "category": "DeveloperTool",
+    "shortDescription": "MiMo TTS 工作台",
+    "longDescription": "基于 MiMo-V2.5-TTS 的通用语音合成工作台：项目/对白解析、批量生成、Take 试听与选用、音色设计/克隆、导出与用量统计。",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
   }
 }
