@@ -47,6 +47,8 @@ crates/desktop/           # Tauri 2 壳
 ## 开发约定（见 AGENTS.md）
 
 - 组件与样式：只用 animal-island-ui 的组件与设计令牌；**不引入 Tailwind**；必须 `import 'animal-island-ui/style'`。
+- 图标：统一使用 **naive-icons**（animal-island-ui 的运行依赖，已在 `ui/package.json` 声明）；不用 emoji / Unicode 符号充当图标。
+- 自定义元素样式：只用 `--animal-*` 设计令牌（颜色 / 圆角 / 间距 / 动效），不写死十六进制色值。
 - 新增 IPC 命令：在 `crates/desktop/src/lib.rs` 实现（逻辑放 core），并在 `ui/src/api.ts` / `types.ts` 补封装与类型。
 - 类型检查：`cd ui && npm run typecheck`（`tools/lint` 会自动执行；`ui/` 存在时 `tools/test` 也会执行）。
 

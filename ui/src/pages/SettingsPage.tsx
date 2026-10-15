@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { Button, Card, Input, Tag, notificationOpen } from "animal-island-ui";
+import {
+  BadgeCheckIcon,
+  FileIcon,
+  GlobeIcon,
+  KeyIcon,
+  SettingsIcon,
+  ShieldIcon,
+  TagIcon,
+} from "naive-icons";
 
 import { api } from "../api";
 import type { ConfigPayload, DoctorReport } from "../types";
@@ -86,7 +95,10 @@ export default function SettingsPage() {
       <div className="stack">
         <Card color="app-teal" pattern="default">
           <div className="stack">
-            <strong>API 配置</strong>
+            <span className="section-title">
+              <KeyIcon size={16} />
+              API 配置
+            </span>
             {payload ? (
               <span className="tiny muted">
                 {`Key 来源：${payload.api_key_source} · 配置：${payload.config_path}`}
@@ -95,6 +107,7 @@ export default function SettingsPage() {
             <Input
               size="small"
               type="password"
+              prefix={<KeyIcon size={14} />}
               placeholder={
                 payload?.config.api.api_key
                   ? `当前：${payload.config.api.api_key}（输入新 Key 以替换）`
@@ -124,6 +137,7 @@ export default function SettingsPage() {
             </div>
             <Input
               size="small"
+              prefix={<GlobeIcon size={14} />}
               value={baseUrl}
               onChange={(event) => setBaseUrl(event.target.value)}
               placeholder="Base URL"
@@ -142,21 +156,24 @@ export default function SettingsPage() {
 
         <Card color="app-blue" pattern="none">
           <div className="stack">
-            <strong>模型 ID</strong>
-            <span className="tiny muted">平台模型下线/更名时在此切换，无需改代码</span>
-            <Input size="small" value={modelTts} onChange={(event) => setModelTts(event.target.value)} />
+            <span className="section-title">
+              <TagIcon size={16} />
+              模型 ID
+            </span>
+            <span className="hint-solid">平台模型下线/更名时在此切换，无需改代码</span>
+            <Input size="small" prefix={<TagIcon size={14} />} value={modelTts} onChange={(event) => setModelTts(event.target.value)} />
             <div className="row">
               <Button size="small" loading={busy} onClick={() => void save("models.tts", modelTts.trim(), "models.tts 已更新")}>
                 保存预置模型
               </Button>
             </div>
-            <Input size="small" value={modelDesign} onChange={(event) => setModelDesign(event.target.value)} />
+            <Input size="small" prefix={<TagIcon size={14} />} value={modelDesign} onChange={(event) => setModelDesign(event.target.value)} />
             <div className="row">
               <Button size="small" loading={busy} onClick={() => void save("models.design", modelDesign.trim(), "models.design 已更新")}>
                 保存设计模型
               </Button>
             </div>
-            <Input size="small" value={modelClone} onChange={(event) => setModelClone(event.target.value)} />
+            <Input size="small" prefix={<TagIcon size={14} />} value={modelClone} onChange={(event) => setModelClone(event.target.value)} />
             <div className="row">
               <Button size="small" loading={busy} onClick={() => void save("models.clone", modelClone.trim(), "models.clone 已更新")}>
                 保存克隆模型
@@ -167,7 +184,10 @@ export default function SettingsPage() {
 
         <Card color="app-yellow" pattern="none">
           <div className="stack">
-            <strong>生成与工具</strong>
+            <span className="section-title">
+              <SettingsIcon size={16} />
+              生成与工具
+            </span>
             <div className="row">
               <Input
                 size="small"
@@ -199,7 +219,7 @@ export default function SettingsPage() {
                 保存退避基数(ms)
               </Button>
             </div>
-            <Input size="small" value={ffmpegPath} onChange={(event) => setFfmpegPath(event.target.value)} />
+            <Input size="small" prefix={<FileIcon size={14} />} value={ffmpegPath} onChange={(event) => setFfmpegPath(event.target.value)} />
             <div className="row">
               <Button size="small" loading={busy} onClick={() => void save("ffmpeg.path", ffmpegPath.trim(), "ffmpeg 路径已更新")}>
                 保存 ffmpeg 路径
@@ -212,8 +232,16 @@ export default function SettingsPage() {
       <Card color="default" pattern="none">
         <div className="stack">
           <div className="row-between">
-            <strong>环境自检</strong>
-            <Button size="small" loading={busy} onClick={() => void runDoctor()}>
+            <span className="section-title">
+              <ShieldIcon size={16} />
+              环境自检
+            </span>
+            <Button
+              size="small"
+              icon={<BadgeCheckIcon size={14} />}
+              loading={busy}
+              onClick={() => void runDoctor()}
+            >
               运行 doctor
             </Button>
           </div>
@@ -221,7 +249,7 @@ export default function SettingsPage() {
           {report ? (
             <div className="stack">
               {report.checks.map((check) => (
-                <div className="row" key={check.name}>
+                <div className="doctor-row" key={check.name}>
                   <Tag size="small" variant="soft" color={STATUS_COLOR[check.status] ?? "default"}>
                     {check.status}
                   </Tag>
@@ -243,7 +271,11 @@ export default function SettingsPage() {
                 ))}
             </div>
           ) : (
-            <span className="muted tiny">点击「运行 doctor」检查 Key / ffmpeg / 网络连通性</span>
+            <div className="empty-state">
+              <ShieldIcon size={32} color="#c4b89e" />
+              <span className="empty-state-title">尚未自检</span>
+              <span className="tiny">点击「运行 doctor」检查 Key / ffmpeg / 网络连通性</span>
+            </div>
           )}
         </div>
       </Card>

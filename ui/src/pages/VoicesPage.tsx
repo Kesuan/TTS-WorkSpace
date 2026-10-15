@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { Button, Card, Input, Modal, Select, Switch, Tag, notificationOpen } from "animal-island-ui";
+import {
+  AnchorIcon,
+  CopyIcon,
+  MicIcon,
+  PaintbrushIcon,
+  PlayIcon,
+  RefreshIcon,
+  TrashIcon,
+} from "naive-icons";
 
 import { api } from "../api";
 import type { VoiceInfo } from "../types";
@@ -148,18 +157,22 @@ export default function VoicesPage() {
       <Card color="app-pink" pattern="default">
         <div className="stack">
           <div className="row-between">
-            <strong>音色设计（voicedesign）</strong>
+            <span className="section-title">
+              <PaintbrushIcon size={16} />
+              音色设计（voicedesign）
+            </span>
             <span className="tiny muted">描述越具体越好；建议随后「固化」以保证跨句一致</span>
           </div>
           <textarea
-            className="mono"
-            style={{ minHeight: 64, width: "100%", padding: 8, borderRadius: 8 }}
+            className="island-textarea"
+            style={{ minHeight: 64 }}
             placeholder="音色描述：如「二十岁出头的年轻女声，音色清亮偏薄，带一点书卷气，语速中等偏慢」"
             value={designPrompt}
             onChange={(event) => setDesignPrompt(event.target.value)}
           />
           <textarea
-            style={{ minHeight: 48, width: "100%", padding: 8, borderRadius: 8 }}
+            className="island-textarea"
+            style={{ minHeight: 48 }}
             placeholder="试听文本（3~10 秒为宜）"
             value={designText}
             onChange={(event) => setDesignText(event.target.value)}
@@ -174,7 +187,13 @@ export default function VoicesPage() {
             />
             <span className="tiny">智能润色文本</span>
             <Switch size="small" checked={optimize} onChange={setOptimize} />
-            <Button size="small" type="primary" loading={busy} onClick={() => void runDesign()}>
+            <Button
+              size="small"
+              type="primary"
+              icon={<PlayIcon size={14} />}
+              loading={busy}
+              onClick={() => void runDesign()}
+            >
               生成试听
             </Button>
           </div>
@@ -185,8 +204,11 @@ export default function VoicesPage() {
         <div className="stack">
           <Card color="app-orange" pattern="none">
             <div className="stack">
-              <strong>克隆音色</strong>
-              <span className="tiny muted">样本要求：wav / mp3，base64 后 ≤10MB</span>
+              <span className="section-title">
+                <CopyIcon size={16} />
+                克隆音色
+              </span>
+              <span className="hint-solid">样本要求：wav / mp3，base64 后 ≤10MB</span>
               <Input
                 size="small"
                 placeholder="样本文件路径"
@@ -199,7 +221,12 @@ export default function VoicesPage() {
                 value={cloneName}
                 onChange={(event) => setCloneName(event.target.value)}
               />
-              <Button size="small" loading={busy} onClick={() => void runClone()}>
+              <Button
+                size="small"
+                icon={<CopyIcon size={14} />}
+                loading={busy}
+                onClick={() => void runClone()}
+              >
                 创建克隆音色
               </Button>
             </div>
@@ -207,8 +234,11 @@ export default function VoicesPage() {
 
           <Card color="app-green" pattern="none">
             <div className="stack">
-              <strong>设计 → 固化</strong>
-              <span className="tiny muted">把设计音色的留档样本固化为克隆音色</span>
+              <span className="section-title">
+                <AnchorIcon size={16} />
+                设计 → 固化
+              </span>
+              <span className="hint-solid">把设计音色的留档样本固化为克隆音色</span>
               <Input
                 size="small"
                 placeholder="来源：design 音色名，或音频文件路径"
@@ -221,7 +251,12 @@ export default function VoicesPage() {
                 value={solidifyName}
                 onChange={(event) => setSolidifyName(event.target.value)}
               />
-              <Button size="small" loading={busy} onClick={() => void runSolidify()}>
+              <Button
+                size="small"
+                icon={<AnchorIcon size={14} />}
+                loading={busy}
+                onClick={() => void runSolidify()}
+              >
                 固化
               </Button>
             </div>
@@ -231,7 +266,10 @@ export default function VoicesPage() {
         <Card color="default" pattern="none">
           <div className="stack">
             <div className="row-between">
-              <strong>音色列表</strong>
+              <span className="section-title">
+                <MicIcon size={16} />
+                音色列表
+              </span>
               <div className="row">
                 <Select
                   options={[
@@ -243,49 +281,63 @@ export default function VoicesPage() {
                   value={kind}
                   onChange={setKind}
                 />
-                <Button size="small" onClick={() => void refresh()}>
+                <Button size="small" icon={<RefreshIcon size={14} />} onClick={() => void refresh()}>
                   刷新
                 </Button>
               </div>
             </div>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th style={{ width: 60 }}>类型</th>
-                  <th style={{ width: 160 }}>名称</th>
-                  <th>ID / 说明</th>
-                  <th style={{ width: 90 }}>样本</th>
-                  <th style={{ width: 70 }} />
-                </tr>
-              </thead>
-              <tbody>
-                {voices.map((voice) => (
-                  <tr key={`${voice.kind}-${voice.id}`}>
-                    <td>
-                      <KindTag voice={voice} />
-                    </td>
-                    <td>{voice.name}</td>
-                    <td className="mono tiny">
-                      {voice.builtin
-                        ? `${voice.language ?? ""} ${voice.gender ?? ""}`
-                        : voice.kind === "design"
-                          ? (voice.design_prompt ?? voice.id)
-                          : voice.source_voice
-                            ? `${voice.id}（固化自 ${voice.source_voice}）`
-                            : voice.id}
-                    </td>
-                    <td className="tiny">{voice.has_sample ? "有" : "-"}</td>
-                    <td>
-                      {voice.builtin ? null : (
-                        <Button size="small" type="text" danger onClick={() => setRemoving(voice)}>
-                          删除
-                        </Button>
-                      )}
-                    </td>
+            {voices.length === 0 ? (
+              <div className="empty-state">
+                <MicIcon size={32} color="#c4b89e" />
+                <span className="empty-state-title">暂无音色</span>
+                <span className="tiny">用上方「音色设计」或「克隆音色」创建第一个</span>
+              </div>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: 60 }}>类型</th>
+                    <th style={{ width: 160 }}>名称</th>
+                    <th>ID / 说明</th>
+                    <th style={{ width: 90 }}>样本</th>
+                    <th style={{ width: 70 }} />
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {voices.map((voice) => (
+                    <tr key={`${voice.kind}-${voice.id}`}>
+                      <td>
+                        <KindTag voice={voice} />
+                      </td>
+                      <td>{voice.name}</td>
+                      <td className="mono tiny">
+                        {voice.builtin
+                          ? `${voice.language ?? ""} ${voice.gender ?? ""}`
+                          : voice.kind === "design"
+                            ? (voice.design_prompt ?? voice.id)
+                            : voice.source_voice
+                              ? `${voice.id}（固化自 ${voice.source_voice}）`
+                              : voice.id}
+                      </td>
+                      <td className="tiny">{voice.has_sample ? "有" : "-"}</td>
+                      <td>
+                        {voice.builtin ? null : (
+                          <Button
+                            size="small"
+                            type="text"
+                            danger
+                            icon={<TrashIcon size={14} />}
+                            onClick={() => setRemoving(voice)}
+                          >
+                            删除
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </Card>
       </div>
@@ -299,7 +351,13 @@ export default function VoicesPage() {
             <Button size="small" onClick={() => setRemoving(null)}>
               取消
             </Button>
-            <Button size="small" danger loading={busy} onClick={() => void confirmRemove()}>
+            <Button
+              size="small"
+              danger
+              icon={<TrashIcon size={14} />}
+              loading={busy}
+              onClick={() => void confirmRemove()}
+            >
               确认删除
             </Button>
           </div>

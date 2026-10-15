@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 
 import {
   Button,
   Card,
+  Divider,
   Input,
   Modal,
   Progress,
@@ -11,6 +13,22 @@ import {
   Tag,
   notificationOpen,
 } from "animal-island-ui";
+import {
+  ChatIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  DownloadIcon,
+  FolderIcon,
+  InboxIcon,
+  PlayIcon,
+  PlusIcon,
+  RedoIcon,
+  RefreshIcon,
+  SlidersIcon,
+  UploadIcon,
+  UsersIcon,
+} from "naive-icons";
 
 import {
   Channel,
@@ -49,25 +67,62 @@ function notifySuccess(description: string) {
   notificationOpen({ message: "完成", description, type: "success" });
 }
 
+type LogTone = "info" | "ok" | "err" | "accent";
+
+function eventTone(event: BatchEvent): LogTone {
+  switch (event.event) {
+    case "started":
+    case "finished":
+      return "accent";
+    case "line_succeeded":
+      return "ok";
+    case "line_failed":
+      return "err";
+    default:
+      return "info";
+  }
+}
+
 function summarizeEvent(event: BatchEvent): string {
   switch (event.event) {
     case "started":
       return `开始：${event.total} 条（并发 ${event.concurrency}，跳过 ${event.skipped}）`;
     case "line_started":
-      return `· ${event.line_id} [${event.role}]`;
+      return `${event.line_id} [${event.role}] 生成中…`;
     case "line_skipped":
-      return `· ${event.line_id} 跳过（${event.reason}）`;
+      return `${event.line_id} 跳过（${event.reason}）`;
     case "line_succeeded":
-      return `✓ ${event.line_id} → take ${event.take_id}（${formatDuration(event.duration_ms)}${
+      return `${event.line_id} → take ${event.take_id}（${formatDuration(event.duration_ms)}${
         event.cached ? "，缓存" : ""
       }）`;
     case "line_failed":
-      return `✗ ${event.line_id} 失败（${event.code}）：${event.message}`;
+      return `${event.line_id} 失败（${event.code}）：${event.message}`;
     case "finished":
       return `完成：成功 ${event.succeeded} / 失败 ${event.failed} / 跳过 ${event.skipped}（缓存 ${event.cached}）`;
     default:
       return "";
   }
+}
+
+function EmptyState({
+  icon,
+  title,
+  hint,
+  action,
+}: {
+  icon: ReactNode;
+  title: string;
+  hint?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="empty-state">
+      {icon}
+      <span className="empty-state-title">{title}</span>
+      {hint ? <span className="tiny">{hint}</span> : null}
+      {action}
+    </div>
+  );
 }
 
 function TakeRow({
@@ -89,11 +144,11 @@ function TakeRow({
   };
 
   if (line.takes.length === 0) {
-    return <span className="muted tiny">暂无 take</span>;
+    return <span className="muted tiny">暂无 take（点击「重新生成」产出第一条）</span>;
   }
 
   return (
-    <div className="stack">
+    <div className="stack" style={{ gap: 8 }}>
       {line.takes.map((take) => (
         <div className="take-row" key={take.take_id}>
           <Tag size="small" variant={take.selected ? "solid" : "outlined"} color={take.selected ? "app-teal" : "default"}>
@@ -106,7 +161,12 @@ function TakeRow({
               已选用
             </Tag>
           ) : (
-            <Button size="small" type="text" onClick={() => void selectTake(take.take_id)}>
+            <Button
+              size="small"
+              type="text"
+              icon={<CheckIcon size={14} />}
+              onClick={() => void selectTake(take.take_id)}
+            >
               选用
             </Button>
           )}
@@ -190,10 +250,20 @@ function LineCard({
           ) : null}
           <span className="mono muted">{line.id}</span>
           <div className="grow" />
-          <Button size="small" onClick={() => setEditing((value) => !value)}>
+          <Button
+            size="small"
+            icon={<SlidersIcon size={14} />}
+            onClick={() => setEditing((value) => !value)}
+          >
             覆盖
           </Button>
-          <Button size="small" type="primary" loading={busy} onClick={() => void regenerate()}>
+          <Button
+            size="small"
+            type="primary"
+            icon={<RedoIcon size={14} />}
+            loading={busy}
+            onClick={() => void regenerate()}
+          >
             重新生成
           </Button>
         </div>
@@ -272,7 +342,13 @@ function RoleBindingTable({
   };
 
   if (detail.roles.length === 0) {
-    return <span className="muted tiny">暂无角色（先导入对白脚本）</span>;
+    return (
+      <EmptyState
+        icon={<UsersIcon size={32} color="#c4b89e" />}
+        title="暂无角色"
+        hint="先在上方导入对白脚本"
+      />
+    );
   }
 
   return (
@@ -361,8 +437,11 @@ function ExportPanel({
     <Card color="app-yellow" pattern="default">
       <div className="stack">
         <div className="row-between">
-          <strong>导出</strong>
-          <Button size="small" type="text" onClick={onClose}>
+          <span className="section-title">
+            <DownloadIcon size={16} />
+            导出
+          </span>
+          <Button size="small" type="text" icon={<ChevronUpIcon size={14} />} onClick={onClose}>
             收起
           </Button>
         </div>
@@ -399,16 +478,26 @@ function ExportPanel({
           <Switch checked={normalize} onChange={setNormalize} size="small" />
           <span className="tiny">静音裁剪</span>
           <Switch checked={trimSilence} onChange={setTrimSilence} size="small" />
-          <Button size="small" type="primary" loading={busy} onClick={() => void run()}>
+          <Button
+            size="small"
+            type="primary"
+            icon={<DownloadIcon size={14} />}
+            loading={busy}
+            onClick={() => void run()}
+          >
             开始导出
           </Button>
         </div>
         {result ? (
           <div className="stack">
-            <DividerLine />
+            <Divider type="dashed-brown" />
             <div className="tiny mono">{result.out_dir}</div>
             <div className="row">
-              <Button size="small" onClick={() => void api.revealPath(result.out_dir).catch(notifyError)}>
+              <Button
+                size="small"
+                icon={<FolderIcon size={14} />}
+                onClick={() => void api.revealPath(result.out_dir).catch(notifyError)}
+              >
                 在 Finder 中显示
               </Button>
               <span className="tiny muted">
@@ -421,10 +510,6 @@ function ExportPanel({
       </div>
     </Card>
   );
-}
-
-function DividerLine() {
-  return <div style={{ borderTop: "1px dashed rgba(0,0,0,0.18)" }} />;
 }
 
 export default function ProjectsPage() {
@@ -580,24 +665,58 @@ export default function ProjectsPage() {
         <Card color="app-teal" pattern="default">
           <div className="stack">
             <div className="row-between">
-              <strong>项目</strong>
+              <span className="section-title">
+                <FolderIcon size={16} />
+                项目
+              </span>
               <div className="row">
-                <Button size="small" onClick={() => void refreshProjects()}>
+                <Button
+                  size="small"
+                  icon={<RefreshIcon size={14} />}
+                  onClick={() => void refreshProjects()}
+                >
                   刷新
                 </Button>
-                <Button size="small" type="primary" onClick={() => setCreateOpen(true)}>
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<PlusIcon size={14} />}
+                  onClick={() => setCreateOpen(true)}
+                >
                   新建
                 </Button>
               </div>
             </div>
             {projects.length === 0 ? (
-              <span className="muted tiny">还没有项目，点击「新建」开始</span>
+              <EmptyState
+                icon={<InboxIcon size={32} color="#c4b89e" />}
+                title="还没有项目"
+                hint="点击「新建」创建你的第一个作品"
+                action={
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<PlusIcon size={14} />}
+                    onClick={() => setCreateOpen(true)}
+                  >
+                    新建项目
+                  </Button>
+                }
+              />
             ) : (
               projects.map((project) => (
                 <div
                   key={project.path}
                   className={`project-list-item${selected === project.path ? " active" : ""}`}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setSelected(project.path)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelected(project.path);
+                    }
+                  }}
                 >
                   <strong>{project.name}</strong>
                   <span className="tiny muted">
@@ -644,7 +763,11 @@ export default function ProjectsPage() {
       <div className="stack">
         {!detail ? (
           <Card color="default">
-            <span className="muted">请选择或新建一个项目</span>
+            <EmptyState
+              icon={<ChatIcon size={32} color="#c4b89e" />}
+              title="请选择或新建一个项目"
+              hint="从左侧列表选择项目，查看台词与角色绑定"
+            />
           </Card>
         ) : (
           <>
@@ -667,15 +790,20 @@ export default function ProjectsPage() {
                     </Tag>
                   </div>
                   <div className="row">
-                    <Button size="small" onClick={() => void refreshDetail()}>
+                    <Button size="small" icon={<RefreshIcon size={14} />} onClick={() => void refreshDetail()}>
                       刷新
                     </Button>
-                    <Button size="small" onClick={() => setShowExport((value) => !value)}>
+                    <Button
+                      size="small"
+                      icon={<DownloadIcon size={14} />}
+                      onClick={() => setShowExport((value) => !value)}
+                    >
                       导出
                     </Button>
                     <Button
                       size="small"
                       type="primary"
+                      icon={<PlayIcon size={14} />}
                       loading={batchRunning}
                       onClick={() => void runBatch()}
                     >
@@ -692,7 +820,12 @@ export default function ProjectsPage() {
                     value={scriptPath}
                     onChange={(event) => setScriptPath(event.target.value)}
                   />
-                  <Button size="small" loading={busy} onClick={() => void importScript()}>
+                  <Button
+                    size="small"
+                    icon={<UploadIcon size={14} />}
+                    loading={busy}
+                    onClick={() => void importScript()}
+                  >
                     导入脚本
                   </Button>
                 </div>
@@ -718,8 +851,9 @@ export default function ProjectsPage() {
                     {batchSummary ? <span className="tiny">本次：{batchSummary}</span> : null}
                     <div className="batch-progress" ref={logRef}>
                       {events.map((event, index) => (
-                        <div key={index} className="mono tiny">
-                          {summarizeEvent(event)}
+                        <div key={index} className="log-line mono tiny">
+                          <span className={`log-dot log-dot-${eventTone(event)}`} />
+                          <span>{summarizeEvent(event)}</span>
                         </div>
                       ))}
                     </div>
@@ -730,11 +864,19 @@ export default function ProjectsPage() {
 
             {showExport ? <ExportPanel detail={detail} onClose={() => setShowExport(false)} /> : null}
 
-            <Card color="app-blue" pattern="none">
+            <Card color="default" pattern="none">
               <div className="stack">
                 <div className="row-between">
-                  <strong>{`角色绑定（${detail.roles.length}）`}</strong>
-                  <Button size="small" onClick={() => setShowRoles((value) => !value)}>
+                  <span className="section-title">
+                    <UsersIcon size={16} />
+                    {`角色绑定（${detail.roles.length}）`}
+                  </span>
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={showRoles ? <ChevronUpIcon size={14} /> : <ChevronDownIcon size={14} />}
+                    onClick={() => setShowRoles((value) => !value)}
+                  >
                     {showRoles ? "收起" : "展开"}
                   </Button>
                 </div>
@@ -751,16 +893,26 @@ export default function ProjectsPage() {
             </Card>
 
             <div className="stack">
-              {detail.lines
-                .filter((line) => line.status !== "removed")
-                .map((line) => (
-                  <LineCard
-                    key={line.id}
-                    line={line}
-                    projectPath={detail.path}
-                    onChanged={() => void refreshDetail()}
+              {detail.lines.filter((line) => line.status !== "removed").length === 0 ? (
+                <Card color="default" pattern="none">
+                  <EmptyState
+                    icon={<ChatIcon size={32} color="#c4b89e" />}
+                    title="暂无台词"
+                    hint="在上方输入对白脚本路径并导入"
                   />
-                ))}
+                </Card>
+              ) : (
+                detail.lines
+                  .filter((line) => line.status !== "removed")
+                  .map((line) => (
+                    <LineCard
+                      key={line.id}
+                      line={line}
+                      projectPath={detail.path}
+                      onChanged={() => void refreshDetail()}
+                    />
+                  ))
+              )}
             </div>
           </>
         )}
